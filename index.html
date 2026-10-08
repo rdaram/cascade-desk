@@ -19,15 +19,14 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="data.json" as="fetch" crossorigin>
-<link rel="stylesheet" href="app.css?v=e378850c7d">
+<link rel="stylesheet" href="app.css?v=d93fb211b1">
 </head>
 <body>
 <a class="skip" href="#app">Skip to content</a>
 <header class="top glass" id="top">
   <div class="bar">
-    <span id="mkt" class="mkt"></span>
     <b id="title-compact" class="compact-title">Swing Desk</b>
-    <span id="ledger-stamp" class="sub2"></span>
+    <span id="mkt" class="nav-status" title=""><i class="dot"></i><span id="mkt-t">Closed</span></span>
   </div>
 </header>
 <h1 id="title" class="largetitle">Swing Desk</h1>
@@ -39,7 +38,7 @@
   <button type="button" class="btn sm" data-install>Install</button>
   <button type="button" class="x" id="install-dismiss" aria-label="Dismiss">×</button>
 </div>
-<div id="feed-note" class="feed-note" role="status" hidden></div>
+<div id="feed-note" class="slimnote" role="status" hidden></div>
 <div id="banners" class="banners" aria-live="polite"></div>
 <main id="app" tabindex="-1"></main>
 <nav class="tabbar glass" id="tabs" aria-label="Sections">
@@ -62,6 +61,6 @@
 <div id="toast" class="toast glass" hidden role="status"></div>
 <noscript><p class="empty">Swing Desk needs JavaScript.</p></noscript>
 
-<script src="app.js?v=e378850c7d" defer></script>
+<script src="app.js?v=d93fb211b1" defer></script>
 </body>
 </html>
