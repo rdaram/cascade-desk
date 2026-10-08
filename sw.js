@@ -1,12 +1,16 @@
 /* Swing Desk service worker. Shell: cache-first (instant/offline). data.json: network-first, cached copy offline.
    VERSION changes only when the app shell changes, which triggers the in-app "Update available" prompt. */
-const VERSION = 'e9caade93d';
+const VERSION = '0d1a32063b';
 const SHELL = 'sd-shell-' + VERSION;
 const DATA = 'sd-data';
 const ASSETS = ["./", "index.html", "app.css", "app.js", "manifest.webmanifest", "fonts/geist.woff2", "fonts/geistmono.woff2", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-192.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png", "icons/favicon-32.png"];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(SHELL).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))));
+  e.waitUntil((async () => {
+    await (await caches.open(SHELL)).addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })));
+    // also keep a first copy of the ledger so the app opens offline right after install (best effort)
+    try { const r = await fetch('data.json', { cache: 'no-store' }); if (r.ok) await (await caches.open(DATA)).put(new URL('data.json', self.registration.scope).href, r); } catch (err) {}
+  })());
 });
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
