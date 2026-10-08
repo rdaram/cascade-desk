@@ -19,13 +19,14 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="data.json" as="fetch" crossorigin>
-<link rel="stylesheet" href="app.css?v=d93fb211b1">
+<link rel="stylesheet" href="app.css?v=2f7c3ff2e6">
 </head>
 <body>
 <a class="skip" href="#app">Skip to content</a>
 <header class="top glass" id="top">
   <div class="bar">
     <b id="title-compact" class="compact-title">Swing Desk</b>
+    <button type="button" id="bell" class="bell" aria-label="Alerts"><svg viewBox="0 0 24 24"><path d="M6 16V10a6 6 0 1 1 12 0v6l1.5 2h-15z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><b id="bell-n" hidden>0</b></button>
     <span id="mkt" class="nav-status" title=""><i class="dot"></i><span id="mkt-t">Closed</span></span>
   </div>
 </header>
@@ -49,7 +50,7 @@
   <button data-tab="settings" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/></svg><span>Settings</span></button>
 </nav>
 <div id="scrim" hidden></div>
-<div id="sheet" class="sheet glass" role="dialog" aria-modal="true" hidden></div>
+<div id="sheet" class="sheet" role="dialog" aria-modal="true" hidden></div>
 <div id="sheet-ios" class="sheet glass" role="dialog" hidden>
   <div class="sheet-h"><div class="grab"></div><button class="x" data-close>Close</button></div>
   <div class="sheet-body">
@@ -61,6 +62,6 @@
 <div id="toast" class="toast glass" hidden role="status"></div>
 <noscript><p class="empty">Swing Desk needs JavaScript.</p></noscript>
 
-<script src="app.js?v=d93fb211b1" defer></script>
+<script src="app.js?v=2f7c3ff2e6" defer></script>
 </body>
 </html>

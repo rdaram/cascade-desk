@@ -1,6 +1,6 @@
 /* Swing Desk service worker. Shell: cache-first (instant/offline). data.json: network-first, cached copy offline.
    VERSION changes only when the app shell changes, which triggers the in-app "Update available" prompt. */
-const VERSION = 'd93fb211b1';
+const VERSION = '2f7c3ff2e6';
 const SHELL = 'sd-shell-' + VERSION;
 const DATA = 'sd-data';
 const ASSETS = ["./", "index.html", "app.css", "app.js", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-192.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png", "icons/favicon-32.png"];

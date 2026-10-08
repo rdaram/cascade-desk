@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='d93fb211b1';
+const APP_VERSION='2f7c3ff2e6';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -87,11 +87,23 @@ function moneyPct(d,p,dp){
   if(ds&&ps) return (state.emph==='pct') ? ps+' ('+ds+')' : ds+' ('+ps+')';
   return ds||ps||'n/a';
 }
-function dayMove(tk){
+function sessionPrev(tk){
   const q=Prices.get(tk);
-  if(!q||q.pc==null||!q.pc) return {d:null,pct:null};
-  const d=q.p-q.pc;
-  return {d, pct:d/q.pc*100};
+  /* A live Finnhub quote carries pc for the previous completed session. */
+  if(q&&q.src!=='ledger'&&q.pc) return q.pc;
+  const candles=(TECH[tk]||{}).candles||[];
+  const priceDate=q&&q.t?etParts(q.t).date:null;
+  if(priceDate&&candles.length){
+    const prior=candles.filter(c=>String(c[0])<priceDate);
+    if(prior.length) return +prior[prior.length-1][4];
+  }
+  return q&&q.pc?+q.pc:null;
+}
+function dayMove(tk){
+  const q=Prices.get(tk), pc=sessionPrev(tk);
+  if(!q||pc==null||!pc) return {d:null,pct:null,pc};
+  const d=q.p-pc;
+  return {d, pct:d/pc*100, pc};
 }
 function pnlPair(t){
   const d=shownPnl(t);
@@ -111,8 +123,9 @@ function spark(tk){
   const s=c.slice(-28).map(x=>x[4]);
   const lo=Math.min(...s), hi=Math.max(...s), w=72, h=28;
   const pts=s.map((v,i)=>`${(i/(s.length-1)*w).toFixed(1)},${(hi===lo?h/2:(1-(v-lo)/(hi-lo))*(h-4)+2).toFixed(1)}`).join(' ');
-  const dm=dayMove(tk), up=dm.d!=null?dm.d>=0:s[s.length-1]>=s[0];
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${up?'var(--up)':'var(--down)'}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  const up=s[s.length-1]>s[0], dn=s[s.length-1]<s[0];
+  const col=up?'var(--up)':dn?'var(--down)':'var(--label3)';
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 function track(t){
   const lv=(t.reasoning||{}).levels||{}, stop=lv.stop, t2=lv.t2, ent=entryRef(t);
@@ -203,74 +216,177 @@ function areaChart(book, withSpy){
     const pc=prev&&prev.eq?d/prev.eq*100:0;
     return {t:r.t, eq:r.eq, d, pct:pc, x:X(i)};
   });
-  const label=`${rows.length} marks since ${dshort(rows[0].t).split(',')[0]}. Nothing drawn between them.`;
+  const since=dshort(rows[0].t).split(',')[0];
+  const label=`Tracking since ${since}`;
   return `<div class="eq-scrub" data-pts="${esc(JSON.stringify(meta))}" data-w="${W}" data-h="${H}">
     <svg class="eq" viewBox="0 0 ${W} ${H}" role="img" aria-label="Equity, ${esc(label)}">
       <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--tint)" stop-opacity=".28"/><stop offset="1" stop-color="var(--tint)" stop-opacity="0"/></linearGradient></defs>
-      <path d="${area}" fill="url(#${gid})"/><path d="M${line}" fill="none" stroke="var(--tint)" stroke-width="2" stroke-linejoin="round"/>${spy}
+      <line x1="${P}" x2="${W-P}" y1="${xy[0][1].toFixed(1)}" y2="${xy[0][1].toFixed(1)}" stroke="currentColor" stroke-opacity=".28" stroke-dasharray="2 4"/>
+      <path d="${area}" fill="url(#${gid})"/><path d="M${line}" fill="none" stroke="var(--tint)" stroke-width="2.25" stroke-linejoin="round"/>${spy}
       <circle class="eq-dot" r="4.5" fill="var(--label)" cx="${xy[xy.length-1][0]}" cy="${xy[xy.length-1][1]}"/>
     </svg>
     <div class="eq-tip" hidden></div>
-    <p class="fine">${esc(label)}${withSpy?' Dashed line is the S&amp;P 500 scaled to the same start, only where both were recorded.':''}</p>
+    <p class="fine">${esc(label)} · started ${usd(rows[0].eq,0)}. Dashed guide is that start.${withSpy?' Gray dashes are the S&amp;P 500 on the same scale, only where both were recorded.':''}</p>
   </div>`;
 }
 
 function dayChange(b){
   const key=b==='main'?'equity':b+'_equity', H=(D.equity_history||[]).filter(h=>h[key]!=null);
-  const a=H[H.length-1], prev=H[H.length-2];
   const be=bookEq(b);
-  const spyQ=Prices.get('SPY');
-  let spy=null;
-  if(a&&prev&&prev.spy&&spyQ) spy=(spyQ.p/prev.spy-1)*100;
-  else if(spyQ&&spyQ.pc) spy=(spyQ.p/spyQ.pc-1)*100;
-  else if(a&&prev&&a.spy&&prev.spy) spy=(a.spy/prev.spy-1)*100;
-  if(!a||!prev){
-    const base=be.k.start;
-    const spyD=spy!=null&&base?base*spy/100:null;
-    return {d:be.k.pnl, pct:be.k.pnl_pct, spy, spyD, label:'since inception', base};
+  const session=(Prices.get('SPY')&&Prices.get('SPY').t)?etParts(Prices.get('SPY').t).date:etParts().date;
+  const prior=H.filter(h=>String(h.t).slice(0,10)<session);
+  const base=prior.length?prior[prior.length-1][key]:(H[0]?H[0][key]:be.k.start);
+  const d=be.eq-base;
+  const sm=dayMove('SPY');
+  return {d, pct:base?d/base*100:null, spy:sm.pct, spyD:sm.d, label:'Today', base};
+}
+function usefulRanges(book){
+  const all=histRows(book);
+  const out=[];
+  for(const r of ['1W','1M']){
+    const n=all.filter(row=>{
+      const last=parseET(all[all.length-1].t)||0;
+      const days=r==='1W'?7:30;
+      return (parseET(row.t)||0)>=last-days*864e5;
+    }).length;
+    if(n>=2 && n<all.length) out.push(r);
   }
-  const d=(be.eq)-(prev[key]);
-  if(spy==null && a.spy&&prev.spy) spy=(a.spy/prev.spy-1)*100;
-  const spyD=spy!=null?prev[key]*spy/100:null;
-  const same=String(a.t).slice(0,10)===String(prev.t).slice(0,10);
-  return {d, pct:prev[key]?d/prev[key]*100:null, spy, spyD, label:same?'today':'since last check', base:prev[key]};
+  return out.length?out.concat(['ALL']):[];
 }
 
-function posCard(t){
+function rowSub(t, withBook){
+  const name=[t.name, SETUPN[t.setup_type]].filter(Boolean).join(' · ');
+  const bits=[];
+  if(withBook) bits.push(BOOKN[t.book]||'');
+  if(t.status!=='OPEN') bits.push(status(t)[0]);
+  if(name) bits.push(name);
+  return bits.filter(Boolean).join(' · ');
+}
+function legendDots(){
+  return `<p class="dotleg"><i class="k stop"></i>Stop <i class="k entry"></i>Entry <i class="k t1"></i>T1 <i class="k t2"></i>T2 <i class="k now"></i>Last</p>`;
+}
+function posCard(t, withBook){
   const pl=pnlPair(t), dm=dayMove(t.ticker);
   const cap=(dm.d!=null&&dm.pct!=null)?`<span class="cap ${cls(dm.d)}" data-cap data-chg data-day="${esc(t.ticker)}">${moneyPct(dm.d, dm.pct)}</span>`:'';
-  const pln=(pl.d!=null&&pl.pct!=null)?`<div class="pl ${cls(pl.d)}" data-chg data-pl="${t.id}">${moneyPct(pl.d, pl.pct)}</div>`:(pl.d==null?'':`<div class="pl ${cls(pl.d)}" data-pl="${t.id}">${susd(pl.d,2)}</div>`);
-  return `<button class="pos" data-trade="${t.id}">
+  const pln=(pl.d!=null&&pl.pct!=null)?`<span class="pl ${cls(pl.d)}" data-chg data-pl="${t.id}">${moneyPct(pl.d, pl.pct)}</span>`:(pl.d==null?'':`<span class="pl ${cls(pl.d)}" data-pl="${t.id}">${susd(pl.d,2)}</span>`);
+  return `<button class="prow" data-trade="${t.id}">
     <div class="pos-r">
-      <div class="pos-id"><b class="tk">${esc(t.ticker)}</b><span class="co">${esc(t.name||SETUPN[t.setup_type]||'')}${t.name&&SETUPN[t.setup_type]?' · '+esc(SETUPN[t.setup_type]):''}</span></div>
+      <div class="pos-id"><b class="tk">${esc(t.ticker)} ${News.dot(t.ticker)} ${alertChip(t)}</b><span class="co">${esc(rowSub(t, withBook))}</span></div>
       ${spark(t.ticker)}
-      <div class="pos-px"><b class="num px" data-px="${esc(t.ticker)}">${spotOf(t)==null?'n/a':n(spotOf(t))}</b>${cap}</div>
+      <div class="pos-px"><b class="num px" data-px="${esc(t.ticker)}">${spotOf(t)==null?'n/a':n(spotOf(t))}</b>${cap}${pln}</div>
     </div>
-    ${pln}
-    ${track(t)}
+    ${(t.status==='OPEN'||t.status==='PENDING')?track(t):''}
   </button>`;
 }
 
+
+function trigKind(t){
+  const o=t.entry_order||{};
+  if(o.kind==='buy_stop') return 'Buy-stop';
+  if(o.kind==='limit_zone') return 'Limit zone';
+  return 'Entry';
+}
+function trigPx(t){
+  const o=t.entry_order||{};
+  if(o.kind==='limit_zone'&&o.zone) return o.zone[1];
+  return o.trigger;
+}
+function awayPair(t){
+  const px=Val.last(t.ticker), ent=trigPx(t);
+  if(px==null||ent==null||!px) return null;
+  return {d:ent-px, pct:(ent/px-1)*100};
+}
+function entryState(t){
+  const px=Val.last(t.ticker), o=t.entry_order||{}, ent=trigPx(t);
+  let hit=false;
+  if(px!=null&&ent!=null){
+    if(o.kind==='buy_stop') hit=px>=o.trigger;
+    else if(o.kind==='limit_zone'&&o.zone) hit=px<=o.zone[1];
+  }
+  return hit?'Triggered':'Watching';
+}
+function entryCard(t){
+  const lv=(t.reasoning||{}).levels||{};
+  const ent=trigPx(t), aw=awayPair(t);
+  const book=t.book==='shadow'?'Shadow':'';
+  const extra=[t.scores&&t.scores.total!=null?'Score '+n(t.scores.total,0):'', t.rs!=null?'RS '+t.rs:''].filter(Boolean).join(' · ');
+  return `<button class="ecard" data-trade="${t.id}">
+    <div class="ec-top"><b>${esc(t.ticker)}</b><span class="echip">${esc(trigKind(t))}</span><span class="echip quiet">${esc(SETUPN[t.setup_type]||'')}</span>${book?`<span class="echip quiet">Shadow</span>`:''}</div>
+    <div class="ec-3">
+      <div><span>Entry</span><b class="num">$${n(ent)}</b></div>
+      <div><span>Stop</span><b class="num neg">$${n(lv.stop)}</b></div>
+      <div><span>Target</span><b class="num upv">$${n(lv.t1)}</b><span class="t2">T2 $${n(lv.t2)}</span></div>
+    </div>
+    <div class="ec-bot">${aw?`<span class="cap ${cls(aw.d)}" data-chg data-away="${t.id}">${moneyPct(aw.d, aw.pct)} away</span>`:''}<span class="echip">${entryState(t)}</span><span class="fine">${(t.entry_order||{}).valid_until?'Expires '+dshort(t.entry_order.valid_until):''}</span></div>
+    ${extra?`<p class="fine">${esc(extra)}</p>`:''}
+  </button>`;
+}
+function pickCard(c){
+  const bits=[];
+  if(c.score!=null) bits.push('Score '+n(c.score,0));
+  if(c.rs_rating!=null) bits.push('RS '+c.rs_rating);
+  if(c.regime) bits.push(String(c.regime));
+  return `<button class="ecard" data-pick="${esc(c.ticker)}">
+    <div class="ec-top"><b>${esc(c.ticker)}</b><span class="echip">${esc(c.order_kind==='buy_stop'?'Buy-stop':'Limit zone')}</span><span class="echip quiet">${esc(SETUPN[c.setup]||c.setup||'')}</span></div>
+    <div class="ec-3">
+      <div><span>Entry</span><b class="num">${c.entry!=null?'$'+n(c.entry):'n/a'}</b></div>
+      <div><span>Stop</span><b class="num">${c.stop!=null?'$'+n(c.stop):''}</b></div>
+      <div><span>Target</span><b class="num">${c.t2_pct!=null?n(c.t2_pct,0)+'% to T2':''}</b></div>
+    </div>
+    <div class="ec-bot"><span class="echip">Watching</span>${bits.length?`<span class="fine">${esc(bits.join(' · '))}</span>`:''}</div>
+  </button>`;
+}
+function rules(){ return D.alert_rules||{near_level_pct:0.02, earnings_trading_days:10}; }
+function rowAlert(t){
+  if(!t||(t.status!=='OPEN'&&t.status!=='PENDING')) return '';
+  const px=Val.last(t.ticker), lv=(t.reasoning||{}).levels||{}, near=rules().near_level_pct||0.02;
+  if(t.status==='OPEN'&&t.t1_hit) return 'T1 hit';
+  const close=(level)=>px!=null&&level!=null&&px&&Math.abs(px-level)/px<=near;
+  if(t.status==='OPEN'&&close(lv.stop)&&px<=lv.stop*(1+near)) return 'Near stop';
+  if(t.status==='OPEN'&&close(lv.t1)) return 'Near T1';
+  const e=t.earnings||{};
+  const days=e.trading_days_away!=null?e.trading_days_away:daysTo(e.date);
+  if(e.date&&days!=null&&days>=0&&days<=(rules().earnings_trading_days||10)) return 'Earnings '+dshort(e.date);
+  return '';
+}
+function alertChip(t){ const a=rowAlert(t); return a?`<span class="achip">${esc(a)}</span>`:''; }
+const News={items:[], loaded:false,
+  set(list){ this.items=Array.isArray(list)?list:[]; },
+  forTicker(tk){ const cut=(Date.now()/1000)-48*3600; return this.items.filter(n=>n.ticker===tk&&(n.t||0)>=cut).sort((a,b)=>(b.big-a.big)||((b.t||0)-(a.t||0))); },
+  dot(tk){ return this.forTicker(tk).length?'<i class="ndot" title="Headline in the last 48 hours"></i>':''; }
+};
+function ago(sec){ if(!sec) return ''; const m=Math.max(0,Math.round(Date.now()/1000-sec)); if(m<3600) return Math.max(1,Math.round(m/60))+'m'; if(m<86400) return Math.round(m/3600)+'h'; return Math.round(m/86400)+'d'; }
+function newsBlock(t){
+  const rows=News.forTicker(t.ticker).slice(0,3);
+  if(!rows.length) return '';
+  return `<h2 class="group-h">News</h2><div class="inset">${rows.map(n=>`<a class="inset-row news" href="${esc(n.url)}" target="_blank" rel="noopener"><span><b>${esc(n.headline)}</b><span class="sub2">${esc(n.source||'')} · ${ago(n.t)}${n.big?' · Notable':''}</span></span></a>`).join('')}</div>`;
+}
 function homeView(){
   const b=state.acct||'main', be=bookEq(b), ch=dayChange(b);
   const open=T.filter(t=>t.book===b&&t.status==='OPEN');
   const pend=T.filter(t=>t.book===b&&t.status==='PENDING');
   const nx=(D.next||[]).filter(x=>x.book===b).slice(0,4);
-  const chips=['1W','1M','ALL'].map(r=>`<button data-range="${r}" class="${(state.range||'1M')===r?'on':''}">${r}</button>`).join('');
-  const spy=(ch.spy!=null&&ch.spyD!=null)?`<p class="vs" id="hero-spy">vs S&amp;P 500 <b class="num ${cls(ch.spy)}" data-chg data-spy="1">${moneyPct(ch.spyD, ch.spy)}</b> since the last mark</p>`:'<p class="vs" id="hero-spy"></p>';
+  const ranges=usefulRanges(b);
+  if(state.range!=='ALL' && !ranges.includes(state.range)) state.range='ALL';
+  const chips=ranges.map(r=>`<button data-range="${r}" class="${(state.range||'ALL')===r?'on':''}">${r}</button>`).join('');
+  const sm=dayMove('SPY');
+  const spy=(sm.d!=null&&sm.pct!=null)?`<p class="vs" id="hero-spy">vs S&amp;P 500 <b class="num ${cls(sm.d)}" data-chg data-day="SPY">${moneyPct(sm.d, sm.pct)}</b></p>`:'<p class="vs" id="hero-spy"></p>';
   return `<section id="overview" data-screen="home">
     <div class="acctseg seg" role="tablist">${['main','shadow','mambo'].map(x=>`<button data-acct="${x}" class="${x===b?'on':''}" role="tab">${BOOKN[x]}</button>`).join('')}</div>
-    <p class="eyebrow">${BOOKN[b]} paper</p>
+    <p class="eyebrow">${b==='shadow'?'Shadow · test book':BOOKN[b]+' paper'}</p>
     <p class="hero-eq num" id="hero-eq" data-eq="${b}">${usd(be.eq,2)}</p>
     <p class="hero-row"><span class="capsule num ${cls(ch.d)}" id="hero-day" data-chg>${ch.d==null||ch.pct==null?susd(ch.d,2):moneyPct(ch.d, ch.pct)}</span> <span class="hero-when" id="hero-when">${esc(ch.label)}</span></p>
+    ${(()=>{const picks=((D.scan||{}).candidates||[]).filter(c=>!c.booked&&!T.some(t=>t.ticker===c.ticker&&(t.status==='OPEN'||t.status==='PENDING'))).slice(0,4);
+  const cards=pend.map(entryCard).join('')+(b==='main'?picks.map(pickCard).join(''):'');
+  return cards?`<h2 class="group-h">Next entries</h2><div class="erow">${cards}</div>`:'';})()}
     ${areaChart(b,false)}
-    <div class="ranges" role="tablist">${chips}</div>
+    ${chips?`<div class="ranges" role="tablist">${chips}</div>`:''}
     ${spy}
     <p class="fine" id="ledger-stamp"></p>
     <p class="fine" id="hero-live"></p>
     <h2 class="group-h">Open</h2>
-    <div class="group">${open.length?open.map(posCard).join(''):'<div class="empty">No open positions.</div>'}</div>
-    ${pend.length?`<h2 class="group-h">Pending</h2><div class="group">${pend.map(posCard).join('')}</div>`:''}
+    ${open.length?legendDots():''}
+    <div class="group">${open.length?open.map(t=>posCard(t,false)).join(''):'<div class="empty">No open positions.</div>'}</div>
     ${nx.length?`<h2 class="group-h">Attention</h2><div class="group">${nx.map(x=>`<div class="cell static"><div class="c1"><b>${dshort(x.date)}</b><span class="sub2">${esc(x.label)}</span></div><div class="c3 sub2">${daysTo(x.date)}d</div></div>`).join('')}</div>`:''}
     <p class="fine">P&amp;L is the exit value, last price minus 0.2% paper slippage. The price is the last trade, the same number everywhere. Tap a change to swap which figure leads. Official fills come only from the scheduled 5-minute bar checks.</p>
   </section>`;
@@ -280,22 +396,10 @@ function positionsView(){
   const b=state.recs||'main';
   const order={OPEN:0,PENDING:1,CLOSED:2,CANCELLED:3};
   const ts=T.filter(t=>b==='all'||t.book===b).sort((x,y)=>(order[x.status]-order[y.status])||((y.scores||{}).total||0)-((x.scores||{}).total||0));
-  const row=t=>{
-    const [st]=status(t), pl=pnlPair(t), dm=dayMove(t.ticker);
-    const cap=(dm.d!=null&&dm.pct!=null)?`<span class="cap ${cls(dm.d)}" data-cap data-chg data-day="${esc(t.ticker)}">${moneyPct(dm.d, dm.pct)}</span>`:'';
-    const pln=(pl.d!=null&&pl.pct!=null)?`<div class="pl ${cls(pl.d)}" data-chg data-pl="${t.id}">${moneyPct(pl.d, pl.pct)}</div>`:'';
-    return `<button class="pos" data-trade="${t.id}">
-      <div class="pos-r">
-        <div class="pos-id"><b class="tk">${esc(t.ticker)}</b><span class="co">${esc(BOOKN[t.book]||'')} · ${esc(st)} · ${esc(t.name||setupName(t))}</span></div>
-        ${spark(t.ticker)}
-        <div class="pos-px"><b class="num px" data-px="${esc(t.ticker)}">${spotOf(t)==null?'':n(spotOf(t))}</b>${cap}</div>
-      </div>
-      ${pln}${t.status==='OPEN'||t.status==='PENDING'?track(t):''}
-    </button>`;
-  };
   return `<section data-screen="positions">
     <div class="seg">${['main','shadow','mambo','all'].map(x=>`<button data-recs="${x}" class="${x===b?'on':''}">${x==='all'?'All':BOOKN[x]}</button>`).join('')}</div>
-    <div class="group">${ts.map(row).join('')||'<div class="empty">Nothing in this book.</div>'}</div>
+    ${ts.some(t=>t.status==='OPEN'||t.status==='PENDING')?legendDots():''}
+    <div class="group">${ts.map(t=>posCard(t, b==='all')).join('')||'<div class="empty">Nothing in this book.</div>'}</div>
   </section>`;
 }
 
@@ -316,18 +420,39 @@ function rebaseNote(t){
   const fill=entryRef(t);
   return `Targets re-based to the ${n(fill)} fill. Original plan: ${n(pl.entry)}, stop ${n(pl.stop)}, T1 ${n(pl.t1)}, T2 ${n(pl.t2)}.`;
 }
+function distPhrase(t, label, val){
+  const pair=distPair(t, val);
+  if(pair.d==null||pair.pct==null) return '';
+  if(label==='Entry'){
+    const above=-pair.d, pc=-pair.pct;
+    return 'you\'re '+moneyPct(above, pc)+' '+(above>0?'above':above<0?'below':'at entry');
+  }
+  if(label==='Stop') return moneyPct(pair.d, pair.pct)+' if hit';
+  return moneyPct(pair.d, pair.pct)+' to go';
+}
 function levelRow(t, label, val, tone){
   if(val==null) return '';
-  const pair=distPair(t, val);
-  const dist=(pair.d!=null&&pair.pct!=null)?`<span class="dist ${cls(pair.d)}" data-chg data-dist="${t.id}|${val}">${moneyPct(pair.d, pair.pct)}</span>`:'';
-  return `<div class="inset-row"><span>${label}</span><span class="inset-v"><b class="num ${tone||''}">${n(val)}</b>${dist}</span></div>`;
+  const phrase=distPhrase(t, label, val);
+  const dist=phrase?`<span class="dist ${cls(label==='Entry'?-(distPair(t,val).d):distPair(t,val).d)}" data-chg data-dist="${t.id}|${val}|${label}">${esc(phrase)}</span>`:'';
+  return `<div class="inset-row lvl"><span class="lv-k">${label}</span><span class="inset-v"><b class="num ${tone||''}">${n(val)}</b>${dist}</span></div>`;
+}
+function sizeView(obj){
+  const raw=obj&&obj.size_small;
+  if(!raw||(raw.shares==null&&raw.amount==null&&raw.risk==null)) return null;
+  const base=+raw.account||150;
+  const mine=+localStorage.getItem('sd.acct.size')||150;
+  const k=base?mine/base:1;
+  const sh=raw.shares==null?null:raw.shares*k;
+  const amt=raw.amount==null?null:raw.amount*k;
+  const line=(sh!=null||amt!=null)?`<p class="size150">For ${usd(mine,0)}: ${sh!=null?n(sh,4)+' sh':''}${amt!=null?' · '+usd(amt,0):''}</p>`:'';
+  return {line, risk:raw.risk==null?null:raw.risk*k, t1:raw.t1==null?null:raw.t1*k, t2:raw.t2==null?null:raw.t2*k, mine};
 }
 function detailHTML(t){
   const r=t.reasoning||{}, lv=r.levels||{}, wl=r.why_levels||{};
   const [st]=status(t), pair=pnlPair(t), cf=conf(t);
   const risks=(r.risks||[]).map(x=>`<li>${esc(x)}</li>`).join('');
   const fills=(t.fills||[]).map(f=>`<div class="inset-row"><span>${esc(f.kind)}<span class="sub2">${dshort(f.filled_at)} · ${esc(f.price_source||'')}</span></span><b class="num">${f.fill_price==null?'':n(f.fill_price)}</b></div>`).join('');
-  const pln=(pair.d!=null&&pair.pct!=null)?`<p class="plline"><span class="capsule ${cls(pair.d)}" data-chg data-pl="${t.id}">${moneyPct(pair.d, pair.pct)}</span> <span class="fine">paper</span></p>`:(pair.d==null?'':`<p class="plline"><span class="capsule ${cls(pair.d)}" data-pl="${t.id}">${susd(pair.d,2)}</span> <span class="fine">paper</span></p>`);
+  const pln=(pair.d!=null&&pair.pct!=null)?`<p class="plline"><span class="capsule ${cls(pair.d)}"><span data-chg data-pl="${t.id}">${moneyPct(pair.d, pair.pct)}</span><span class="paper">paper</span></span></p>`:(pair.d==null?'':`<p class="plline"><span class="capsule ${cls(pair.d)}"><span data-pl="${t.id}">${susd(pair.d,2)}</span><span class="paper">paper</span></span></p>`);
   return `<div class="sheet-h"><button class="x" data-close aria-label="Close">Close</button><div class="grab"></div></div>
     <div class="sheet-body" id="sheet-body">
       <p class="eyebrow">${esc(BOOKN[t.book]||'')} · ${esc(st)}${cf?' · '+esc(cf[0])+' confidence':''}</p>
@@ -335,12 +460,17 @@ function detailHTML(t){
       <p class="co">${esc(t.name||'')} · ${esc(setupName(t))}</p>
       ${pln}
       ${candleChart(t)}
+      ${legendDots()}
       ${track(t)}
+      ${sizeView(t)?sizeView(t).line:''}
       <div class="inset">
         ${levelRow(t,'Entry',entryRef(t),'')}
         ${levelRow(t,'Stop',lv.stop,'neg')}
+        ${sizeView(t)&&sizeView(t).risk!=null?`<div class="inset-row"><span>Risk at your size</span><b class="num">${usd(sizeView(t).risk,0)}</b></div>`:''}
         ${levelRow(t,'T1',lv.t1,'')}
-        ${levelRow(t,'T2',lv.t2,'pos')}
+        ${sizeView(t)&&sizeView(t).t1!=null?`<div class="inset-row"><span>T1 at your size</span><b class="num">${usd(sizeView(t).t1,0)}</b></div>`:''}
+        ${levelRow(t,'T2',lv.t2,'upv')}
+        ${sizeView(t)&&sizeView(t).t2!=null?`<div class="inset-row"><span>T2 at your size</span><b class="num">${usd(sizeView(t).t2,0)}</b></div>`:''}
         <div class="inset-row"><span>Shares</span><b class="num">${n(t.contracts_open??t.contracts,0)}</b></div>
         <div class="inset-row"><span>Risk</span><b class="num">${usd(t.max_risk_usd)}</b></div>
         <div class="inset-row"><span>R:R</span><b class="num">${rrTxt(t.rr)}</b></div>
@@ -362,7 +492,7 @@ function detailHTML(t){
         ${t.postmortem?`<h3>After the close</h3><p>${esc(t.postmortem.why||t.postmortem.one_liner||'')}</p>`:''}
       </div>
       <p class="fine">${esc(t.id)} · rec ${esc(t.rec_id||'n/a')} · method v${esc(t.method_version||'')} · issued ${dshort(t.created_at)} ET</p>
-      ${fills?`<h2 class="group-h">Fills</h2><div class="inset">${fills}</div>`:''}
+      ${newsBlock(t)}${fills?`<h2 class="group-h">Fills</h2><div class="inset">${fills}</div>`:''}
     </div>`;
 }
 
@@ -375,10 +505,15 @@ function activityView(){
   const seg=`<div class="seg">${[['fills','Fills'],['alerts','Alerts'],['post','Post-mortems']].map(([k,l])=>`<button data-act="${k}" class="${mode===k?'on':''}">${l}</button>`).join('')}</div>`;
   let body='';
   if(mode==='fills'){
+    const pend=T.filter(t=>t.status==='PENDING');
+    const cards=pend.length?`<h2 class="group-h">Next entries</h2><div class="erow">${pend.map(entryCard).join('')}</div>`:'';
     const fl=FILLS.slice().reverse();
-    body=`<div class="group">${fl.map(f=>{
+    body=cards+`<div class="group">${fl.map(f=>{
+      const bought=f.kind==='entry'||f.side==='buy';
       const k=f.kind==='cancel'?'exit':(f.side==='sell'?'exit':'fill');
-      return `<div class="tl-item" id="fill-${f.fill_id}">${ico(k)}<div><b>${esc(f.ticker)} ${esc((f.kind||'').replace('_',' '))}</b><span class="sub2">${dshort(f.filled_at)} · ${esc(BOOKN[f.account]||f.account||'')} · ${esc(f.rec_id||'')}</span><span class="sub2">${esc(f.order_type||'')} · ${esc(f.price_source||'')}</span></div><b class="num">${f.fill_price==null?'':n(f.fill_price)}</b></div>`;
+      const who=f.account==='shadow'?'Shadow':'Main';
+      const title=bought?`${esc(f.ticker)} Bought`:`${esc(f.ticker)} ${esc((f.kind||'').replace('_',' '))}`;
+      return `<div class="tl-item" id="fill-${f.fill_id}">${ico(k)}<div><b>${title}</b><span class="sub2">${dshort(f.filled_at)} · ${who}${who==='Shadow'?' test book':''}</span></div><b class="num">${f.fill_price==null?'':(bought?'$'+n(f.fill_price):n(f.fill_price))}</b></div>`;
     }).join('')||'<div class="empty">No fills yet.</div>'}</div>`;
   } else if(mode==='alerts'){
     body=`<div class="group">${(D.alerts||[]).slice(0,40).map(a=>{
@@ -426,7 +561,7 @@ function perfPanel(){
     <p class="hero-eq num">${usd(be.eq,2)}</p>
     <p class="capsule ${cls(ch.d)}" data-chg>${moneyPct(ch.d, ch.pct)}</p>
     <div class="card">${areaChart(b,true)}</div>
-    <div class="ranges">${['1W','1M','ALL'].map(r=>`<button data-range="${r}" class="${(state.range||'1M')===r?'on':''}">${r}</button>`).join('')}</div>
+    ${usefulRanges(b).length?`<div class="ranges">${usefulRanges(b).map(r=>`<button data-range="${r}" class="${(state.range||'ALL')===r?'on':''}">${r}</button>`).join('')}</div>`:''}
     <div class="inset">
       <div class="inset-row"><span>Cash</span><b class="num">${usd(a.cash,2)}</b></div>
       <div class="inset-row"><span>vs S&amp;P 500, since start</span><b class="num ${cls(a.vs_spy_pct)}" ${a.vs_spy_pct==null?'':'data-chg'}>${a.vs_spy_pct==null?'n/a':moneyPct((a.start_cash||100000)*a.vs_spy_pct/100, a.vs_spy_pct)}</b></div>
@@ -479,6 +614,11 @@ function settingsView(){
   const d=Live.diag();
   const hm=ms=>ms?etParts(ms).hms:'never';
   return `<section data-screen="settings">
+    <h2 class="group-h">Account</h2>
+    <div class="group padg">
+      <label class="lbl" for="acct-size">My account size</label>
+      <div class="keyrow"><input id="acct-size" inputmode="decimal" value="${esc(localStorage.getItem('sd.acct.size')||'150')}"><span class="fine">Dollars. Rescales a pick's $150 plan on this device. Default 150.</span></div>
+    </div>
     <h2 class="group-h">Appearance</h2>
     <div class="seg" id="theme-seg">${[['system','System'],['light','Light'],['dark','Dark']].map(([k,l])=>`<button data-theme-set="${k}" class="${th===k?'on':''}">${l}</button>`).join('')}</div>
     <h2 class="group-h">Live prices</h2>
@@ -737,7 +877,9 @@ const UI = {
       if(pair.d==null){el.textContent='';return} el.textContent=pair.pct==null?susd(pair.d,2):moneyPct(pair.d, pair.pct);
       el.classList.remove('pos','neg','mute'); el.classList.add(cls(pair.d)); });
     $$('[data-day]').forEach(el=>{ const mv=dayMove(el.dataset.day); if(mv.d==null||mv.pct==null)return; el.textContent=moneyPct(mv.d, mv.pct); el.classList.remove('pos','neg','mute'); el.classList.add(cls(mv.d)) });
-    $$('[data-dist]').forEach(el=>{ const [id,lv]=el.dataset.dist.split('|'); const t=T.find(x=>x.id===id); if(!t)return; const pair=distPair(t,+lv); if(pair.d==null)return; el.textContent=moneyPct(pair.d, pair.pct); el.classList.remove('pos','neg','mute'); el.classList.add(cls(pair.d)) });
+    $$('[data-dist]').forEach(el=>{ const parts=el.dataset.dist.split('|'); const t=T.find(x=>x.id===parts[0]); if(!t)return; const phrase=distPhrase(t, parts[2]||'', +parts[1]); if(!phrase)return; el.textContent=phrase; const pair=distPair(t,+parts[1]); const signed=parts[2]==='Entry'?-pair.d:pair.d; el.classList.remove('pos','neg','mute'); el.classList.add(cls(signed)) });
+    $$('[data-away]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.away); if(!t)return; const aw=awayPair(t); if(!aw)return; el.textContent=moneyPct(aw.d, aw.pct)+' away'; el.classList.remove('pos','neg','mute'); el.classList.add(cls(aw.d)) });
+    const bn=$('#bell-n'); if(bn){ const n=T.filter(t=>rowAlert(t)).length; bn.hidden=!n; bn.textContent=String(n); }
     $$('[data-dot]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.dot); const tr=el.closest('[data-track]'); if(!t||!tr)return; const px=Val.last(t.ticker); if(px==null)return;
       const s=+tr.dataset.stop, t2=+tr.dataset.t2; if(t2===s)return; el.style.left=Math.max(0,Math.min(100,(px-s)/(t2-s)*100))+'%' });
     $$('[data-chart-px]').forEach(c=>{ const px=Val.last(c.dataset.chartPx); const wrap=c.closest('.chart-wrap'); if(px==null||!wrap)return;
@@ -751,8 +893,6 @@ const UI = {
     const hd=$('#hero-day');
     if(hd && ch.d!=null && ch.pct!=null){ hd.textContent=moneyPct(ch.d, ch.pct); hd.classList.remove('pos','neg','mute'); hd.classList.add(cls(ch.d)) }
     const hw=$('#hero-when'); if(hw) hw.textContent=ch.label;
-    const sp=$('#hero-spy');
-    if(sp && ch.spy!=null && ch.spyD!=null) sp.innerHTML='vs S&amp;P 500 <b class="num '+cls(ch.spy)+'" data-chg data-spy="1">'+moneyPct(ch.spyD, ch.spy)+'</b> since the last mark';
     if(hl) hl.textContent = be.any ? 'Live estimate '+moneyPct(be.d, be.base?be.d/be.base*100:null)+' versus the ledger mark of '+usd(be.base,2)+'. The official equity updates at the next check.' : '';
     this.crossings(); this.stamp(); this.diag();
   },
@@ -822,14 +962,102 @@ function bindChart(root){
   });
 }
 const Sheet={
-  open(html){ const s=$('#sheet'), sc=$('#scrim'); s.innerHTML=html; s.hidden=false; sc.hidden=false; document.body.classList.add('sheet-open'); requestAnimationFrame(()=>s.classList.add('on')); UI.haptic(12); bindChart(s);
-    const body=$('#sheet-body',s)||s; let y0=null, dy=0;
-    s.querySelector('.grab').onpointerdown=e=>{ y0=e.clientY; s.setPointerCapture(e.pointerId) };
-    s.onpointermove=e=>{ if(y0==null)return; dy=Math.max(0,e.clientY-y0); s.style.transform=`translateY(${dy}px)` };
-    s.onpointerup=()=>{ if(dy>90) this.close(); else s.style.transform=''; y0=null; dy=0 };
+  fromPop:false,
+  place(s, y){
+    const desk=matchMedia('(min-width:900px)').matches;
+    s.style.transform=desk?`translate3d(-50%,${y}px,0)`:`translate3d(0,${y}px,0)`;
   },
-  close(){ const s=$('#sheet'); s.classList.remove('on'); s.style.transform=''; document.body.classList.remove('sheet-open'); setTimeout(()=>{s.hidden=true;$('#scrim').hidden=true},280) },
-  trade(id){ const t=T.find(x=>x.id===id); if(!t)return; this.open(detailHTML(t)) }
+  open(html){
+    const s=$('#sheet'), sc=$('#scrim');
+    s.innerHTML=html; s.hidden=false; sc.hidden=false; sc.style.opacity='';
+    document.body.classList.add('sheet-open');
+    s.style.transition='none'; this.place(s, 40);
+    UI.haptic(12); bindChart(s); this.wire(s);
+    if(!STATIC){ s.style.willChange='transform'; requestAnimationFrame(()=>{ s.style.transition=''; s.classList.add('on'); this.place(s, 0); const done=()=>{ s.style.willChange=''; s.removeEventListener('transitionend', done); }; s.addEventListener('transitionend', done); }); }
+    else { s.classList.add('on'); this.place(s, 0); }
+    if(!history.state||!history.state.sdSheet) history.pushState({sdSheet:1}, '');
+  },
+  wire(s){
+    const body=s.querySelector('.sheet-body');
+    const head=s.querySelector('.sheet-h');
+    const sc=$('#scrim');
+    let active=false, y0=0, dy=0, lastY=0, lastT=0, fromBody=false;
+    const height=()=>s.getBoundingClientRect().height||640;
+    const apply=y=>{
+      let yy=y;
+      if(yy<0) yy=yy*0.35;
+      s.style.transition='none';
+      this.place(s, Math.max(-80, yy));
+      if(sc) sc.style.opacity=String(Math.max(0.15, 1-Math.max(0,yy)/height()));
+    };
+    const finish=()=>{
+      if(!active) return;
+      active=false; s.style.willChange='';
+      const dt=Math.max(1, lastT-(lastT-dy&&0));
+      const vy=(lastY-y0)/Math.max(16, performance.now()- (lastT- (lastY===y0?0:1)*0) || 1);
+      const speed=(lastY-y0)/Math.max(1, performance.now()-startT);
+      s.style.transition='';
+      if(dy>height()*0.25 || speed>0.5) this.close();
+      else { this.place(s, 0); if(sc) sc.style.opacity=''; s.classList.add('on'); }
+      dy=0;
+    };
+    let startT=0;
+    const down=(y, bodyDrag)=>{
+      if(bodyDrag && body && body.scrollTop>0) return;
+      active=true; fromBody=!!bodyDrag; y0=lastY=y; dy=0; startT=lastT=performance.now();
+      s.style.willChange='transform';
+    };
+    const move=(y, e)=>{
+      if(!active) return;
+      dy=y-y0; lastY=y; lastT=performance.now();
+      if(fromBody && body && body.scrollTop>0 && dy>0){ active=false; s.style.willChange=''; return; }
+      if(e.cancelable) e.preventDefault();
+      apply(dy);
+    };
+    const up=()=>{
+      if(!active) return;
+      const speed=(lastY-y0)/Math.max(1, performance.now()-startT);
+      active=false; s.style.willChange=''; s.style.transition='';
+      if(dy>height()*0.25 || speed>0.5) this.close();
+      else { this.place(s, 0); if(sc){ sc.style.opacity=''; } }
+      dy=0;
+    };
+    if(head){
+      head.addEventListener('touchstart', e=>{ down(e.touches[0].clientY, false); }, {passive:true});
+      head.addEventListener('touchmove', e=>{ move(e.touches[0].clientY, e); }, {passive:false});
+      head.addEventListener('touchend', up);
+      head.addEventListener('touchcancel', up);
+    }
+    if(body){
+      body.addEventListener('touchstart', e=>{ down(e.touches[0].clientY, true); }, {passive:true});
+      body.addEventListener('touchmove', e=>{
+        if(!active) return;
+        const y=e.touches[0].clientY;
+        if(body.scrollTop>0){ active=false; s.style.willChange=''; return; }
+        if(y-y0>0 || y-y0<0) move(y, e);
+      }, {passive:false});
+      body.addEventListener('touchend', up);
+      body.addEventListener('touchcancel', up);
+    }
+  },
+  close(fromPop){
+    const s=$('#sheet'), sc=$('#scrim');
+    s.classList.remove('on'); s.style.transition='';
+    const desk=matchMedia('(min-width:900px)').matches;
+    s.style.transform=desk?'translate3d(-50%,110%,0)':'translate3d(0,110%,0)';
+    if(sc) sc.style.opacity='0';
+    document.body.classList.remove('sheet-open');
+    setTimeout(()=>{ s.hidden=true; if(sc){ sc.hidden=true; sc.style.opacity=''; } s.style.transform=''; }, 320);
+    if(!fromPop && history.state && history.state.sdSheet){ this.fromPop=true; history.back(); }
+  },
+  trade(id){ const t=T.find(x=>x.id===id); if(!t)return; this.open(detailHTML(t)) },
+  alerts(){
+    const live=T.filter(t=>rowAlert(t)).map(t=>({t:'', tk:t.ticker, text:rowAlert(t), book:t.book}));
+    const hist=(D.alerts||[]).map(a=>({t:a.t, tk:a.ticker||'', text:(a.type||'').replace('_',' ')+(a.text?': '+a.text:''), book:a.book}));
+    const rows=live.concat(hist);
+    const html=`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><h2 class="sheet-title">Alerts</h2><div class="inset">${rows.map(r=>`<div class="inset-row"><span><b>${esc(r.tk)} ${esc(r.text)}</b><span class="sub2">${r.t?dshort(r.t)+' ET':''}${r.book?' · '+esc(BOOKN[r.book]||r.book):''}</span></span></div>`).join('')||'<div class="empty">Nothing near a level.</div>'}</div></div>`;
+    this.open(html);
+  }
 };
 const Theme={
   get(){ return localStorage.getItem('sd.theme')||'system' },
@@ -882,7 +1110,7 @@ function paintKeyState(){
   s.textContent = Live.key()? 'A key is saved on this device.' : 'No key on this device.';
 }
 
-state.tab=qs.get('tab')||'home'; state.ins='perf'; state.act='fills'; state.emph=localStorage.getItem('sd.emph')||'usd'; state.range=localStorage.getItem('sd.range')||'1M';
+state.tab=qs.get('tab')||'home'; state.ins='perf'; state.act='fills'; state.emph=localStorage.getItem('sd.emph')||'usd'; state.range=localStorage.getItem('sd.range')||'ALL';
 const scrollMem={};
 function render(){
   $('#app').innerHTML=screen();
@@ -899,6 +1127,9 @@ function gotoTab(tab){
   if(!TITLES[tab]) return;
   if(tab===state.tab){ scrollTo({top:0, behavior: STATIC?'auto':'smooth'}); return }
   scrollMem[state.tab]=scrollY; state.tab=tab; render(); scrollTo(0, scrollMem[tab]||0); UI.haptic(8);
+  if(!STATIC){ const app=$('#app'); app.style.willChange='transform, opacity';
+    const anim=app.animate([{opacity:0,transform:'translate3d(0,8px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}],{duration:220,easing:'cubic-bezier(.2,.8,.2,1)'});
+    anim.finished.then(()=>{ app.style.willChange='auto'; }).catch(()=>{}); }
 }
 function wireSettings(){
   const inp=$('#key-in'); if(!inp||inp.dataset.wired) return; inp.dataset.wired='1';
@@ -907,6 +1138,7 @@ function wireSettings(){
   $('#key-save').onclick=async()=>{ const k=inp.value.trim(); const o=$('#key-test'); if(!k){o.textContent='Paste a key first.';return} o.textContent='Testing…'; const r=await Live.test(k); if(!r.ok){o.textContent=r.err+' Not saved.';return} Live.setKey(k); inp.value=''; await Live.start(); paintKeyState(); UI.applyLive(); o.textContent='Saved on this device. SPY '+n(r.px)+'.' };
   $('#key-remove').onclick=()=>{ Live.setKey(''); Live.stop(true); Live.state='nokey'; Live.err=''; Prices.seed(D); paintKeyState(); UI.applyLive(); $('#key-test').textContent='Key removed from this device.' };
   const sw=$('#sw-check'); if(sw) sw.onclick=()=>{ SW.check(); UI.toast('Checking for an update') };
+  const az=$('#acct-size'); if(az) az.onchange=()=>{ const v=Math.max(1, +az.value||150); localStorage.setItem('sd.acct.size', String(v)); az.value=String(v); render(); };
 }
 const Net={ok:true};
 async function loadData(){
@@ -917,7 +1149,7 @@ async function loadData(){
     const d=await r.json();
     Net.ok=r.headers.get('X-SD-Offline')!=='1';
     const first=!D, changed=first||d.generated_at!==D.generated_at;
-    if(changed){ setData(d); Live.seed(); render(); if(!first) UI.toast('Ledger updated '+String(d.as_of||d.generated_at).slice(11,16)+' ET'); if(first&&Live.key()) Live.start(); else Live.resubscribe() }
+    if(changed){ setData(d); News.set(d.news||[]); Live.seed(); render(); if(!first) UI.toast('Ledger updated '+String(d.as_of||d.generated_at).slice(11,16)+' ET'); if(first&&Live.key()) Live.start(); else Live.resubscribe() }
   }catch(e){
     Net.ok=false;
     if(!D) $('#app').innerHTML='<div class="empty">Could not load the ledger. '+(navigator.onLine?'Retrying.':'You are offline.')+'</div>';
@@ -953,6 +1185,10 @@ document.addEventListener('click', e=>{
   if(e.target.closest('#feed-dismiss')){ localStorage.setItem('sd.feed.dismissed','1'); UI.applyLive(); return }
   const cap=e.target.closest('[data-cap]'); if(cap){ state.emph=state.emph==='pct'?'usd':'pct'; localStorage.setItem('sd.emph', state.emph); render(); return }
   const rg=e.target.closest('[data-range]'); if(rg){ state.range=rg.dataset.range; localStorage.setItem('sd.range', state.range); render(); return }
+  if(e.target.closest('#bell')){ Sheet.alerts(); return }
+  const pk=e.target.closest('[data-pick]'); if(pk){ const c=((D.scan||{}).candidates||[]).find(x=>x.ticker===pk.dataset.pick); if(!c) return;
+    const sz=sizeView(c);
+    Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">Scan pick</p><h2 class="sheet-title">${esc(c.ticker)}</h2><p class="co">${esc(c.name||'')} · ${esc(SETUPN[c.setup]||'')}</p>${sz?sz.line:''}<div class="inset"><div class="inset-row"><span>Entry</span><b class="num">${c.entry!=null?'$'+n(c.entry):'n/a'}</b></div>${c.stop!=null?`<div class="inset-row"><span>Stop</span><b class="num">$${n(c.stop)}</b></div>`:''}${sz&&sz.risk!=null?`<div class="inset-row"><span>Risk at your size</span><b class="num">${usd(sz.risk,0)}</b></div>`:''}</div><div class="prose">${c.pattern?`<p>${esc(c.pattern)}</p>`:''}</div></div>`); return }
   const tab=e.target.closest('[data-tab]'); if(tab){ gotoTab(tab.dataset.tab); return }
   const th=e.target.closest('[data-theme-set]'); if(th){ localStorage.setItem('sd.theme', th.dataset.themeSet); Theme.apply(); render(); return }
   const ac=e.target.closest('[data-acct]'); if(ac){ state.acct=ac.dataset.acct; render(); return }
@@ -984,6 +1220,8 @@ function paintBanner(){
 }
 paintBanner();
 addEventListener('appinstalled', paintBanner);
+addEventListener('popstate', ()=>{ const s=$('#sheet'); if(s&&!s.hidden) Sheet.close(true); });
+addEventListener('keydown', e=>{ if(e.key==='Escape'){ const s=$('#sheet'); if(s&&!s.hidden) Sheet.close(); } });
 Theme.apply(); Install.init(); SW.init();
 window.__chgAudit=function(){
   const bad=[];
