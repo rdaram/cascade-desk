@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='465d59dd9e';
+const APP_VERSION='e9caade93d';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -196,14 +196,14 @@ function tradeCard(t,i){
   const exitRules=pl.entry?`Stop ${n(lv.stop)} first (every 5-minute bar; a gap below fills at the open). T1 ${n(lv.t1)}: sell half, stop to breakeven. T2 ${n(lv.t2)}: sell the rest. Time stop ${t.time_stop_weeks||pl.time_stop_weeks} weeks after the fill${t.status==='OPEN'&&t.time_stop?' ('+dshort(t.time_stop)+')':''}. Earnings rule at the close before the report.`:esc((t.kill_switch||{}).text||'');
   const rs=r.error?`<p class="mute">Reasoning unavailable: ${esc(r.error)}</p>`:`
      ${r.summary?`<p class="sum">${esc(r.summary)}</p>`:''}
-     <h4>Why this stock</h4><p>${esc(r.why_stock)}</p>
-     <h4>Why now</h4><p>${esc(r.why_now)}</p>
-     <h4>Why these levels</h4><p>${esc(wl.entry)}</p><p style="margin-top:8px">${esc(wl.stop)}</p><p style="margin-top:8px">${esc(wl.t1)} ${esc(wl.t2)}</p><p style="margin-top:8px">${esc(wl.realism)}</p>
-     <h4>What could go wrong</h4><ul>${risks}</ul>
-     <h4>Confidence</h4><p>${esc((r.confidence||{}).why)}</p>
-     ${t.book!=='main'&&t.why_not_main_detail?`<h4>Why it is not in the Main account</h4><p>${esc(t.why_not_main_detail)}</p>`:''}
-     ${t.postmortem?`<h4>${t.realized_pnl>0?'Why it worked':'Why it failed'}</h4><p>${esc(t.postmortem.why||t.postmortem.one_liner)}</p>`:''}
-     <h4>Exit rules</h4><p>${exitRules}</p>`;
+     <h3>Why this stock</h3><p>${esc(r.why_stock)}</p>
+     <h3>Why now</h3><p>${esc(r.why_now)}</p>
+     <h3>Why these levels</h3><p>${esc(wl.entry)}</p><p style="margin-top:8px">${esc(wl.stop)}</p><p style="margin-top:8px">${esc(wl.t1)} ${esc(wl.t2)}</p><p style="margin-top:8px">${esc(wl.realism)}</p>
+     <h3>What could go wrong</h3><ul>${risks}</ul>
+     <h3>Confidence</h3><p>${esc((r.confidence||{}).why)}</p>
+     ${t.book!=='main'&&t.why_not_main_detail?`<h3>Why it is not in the Main account</h3><p>${esc(t.why_not_main_detail)}</p>`:''}
+     ${t.postmortem?`<h3>${t.realized_pnl>0?'Why it worked':'Why it failed'}</h3><p>${esc(t.postmortem.why||t.postmortem.one_liner)}</p>`:''}
+     <h3>Exit rules</h3><p>${exitRules}</p>`;
   const sz=t.sizing||{};
   const kv=[
     ['Entry',`${o.kind==='buy_stop'?'Buy-stop ':o.kind==='limit_zone'?'Limit ':''}${n(ent)}`,''],
@@ -520,7 +520,7 @@ function stackTables(root){for(const tb of $$('table.stack',root||document)){con
 function afterPartial(root){stackTables(root);observe(root);UI.applyLive()}
 function render(){
   const y=scrollY,open=$$('.tc.open').map(c=>c.id);
-  $('#app').innerHTML=hero()+accountSec()+tradesSec()+scanSec()+activitySec()+learningSec()+recordSec()+glossarySec()+footer();
+  $('#app').innerHTML='<div class="feed-note" id="feed-note" role="status"></div>'+hero()+accountSec()+tradesSec()+scanSec()+activitySec()+learningSec()+recordSec()+glossarySec()+footer();
   renderAccount();renderCards();stackTables();observe();if(!rendered)counters();
   for(const id of open){const c=document.getElementById(id);if(c){c.classList.add('open');const b=$('.drawer-btn',c);if(b)b.setAttribute('aria-expanded','true')}}
   if(qs.has('open'))$$('.tc').slice(0,+qs.get('open')||1).forEach(c=>c.classList.add('open'));
