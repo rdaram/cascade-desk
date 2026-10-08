@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='6d186b0afb';
+const APP_VERSION='3bd9e44402';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -51,528 +51,686 @@ const parseET=s=>{/* "2026-10-08 10:03 EDT" -> epoch ms */ if(!s)return null;con
 function status(t){
   if(t.status==='CANCELLED')return['Cancelled','cxl'];
   if(t.status==='CLOSED')return['Closed','closed'];
-  if(t.status==='OPEN')return t.t2_hit?['T2 hit','t1']:t.t1_hit?['T1 hit','t1']:['Open','live'];
+  if(t.status==='OPEN')return t.t2_hit?['T2 hit','t1']:t.t1_hit?['T1 hit','t1']:['Open','open'];
   return['Pending','pend'];
 }
-function conf(t){const c=((t.reasoning||{}).confidence||{}).rating;return c?[c+' confidence',c==='High'?'hi':c==='Medium'?'md':'lo']:null}
+function conf(t){const c=((t.reasoning||{}).confidence||{}).rating;return c?[c,c==='High'?'hi':c==='Medium'?'md':'lo']:null}
 function pnlOf(t){if(t.status==='CLOSED')return t.realized_pnl;if(t.status==='OPEN')return (t.unrealized_pnl||0)+(t.realized_partial||0);return null}
-function ledgerSpot(t){return t.last_spot||((TECH[t.ticker]||{}).close)||((t.indicative_latest||{}).spot)||((t.indicative||{}).spot)}
-function spotOf(t){const q=Live.quote(t.ticker);return q&&q.p!=null?q.p:ledgerSpot(t)}
+function shownPnl(t){
+  if(t.status!=='OPEN'||!Val.live(t.ticker))return pnlOf(t);
+  const ent=entryRef(t),qty=t.contracts_open??t.contracts;
+  if(ent==null||qty==null)return pnlOf(t);
+  return (t.realized_partial||0)+qty*(Val.exit(t.ticker)-ent);
+}
+function ledgerSpot(t){const q=Prices.get(t.ticker);return q?q.p:null}
+function spotOf(t){return Val.last(t.ticker)}
 const SETUPN={breakout:'Breakout',pullback:'Pullback',drift:'Post-catalyst drift',reversal:'Oversold reversal'};
 function entryRef(t){const f=(t.fills||[]).find(x=>x.kind==='entry'||x.side==='buy');const lv=(t.reasoning||{}).levels||{};return f&&f.fill_price!=null?f.fill_price:(t.plan||{}).entry??lv.entry??(t.user_levels||{}).entry??((t.indicative||{}).spot)}
-function orderText(t,short){const o=t.entry_order||{};
-  if(o.kind==='buy_stop')return (short?'Buy-stop ':'Buy-stop ')+n(o.trigger);
-  if(o.kind==='limit_zone')return 'Limit zone '+n(o.zone[0])+'-'+n(o.zone[1]);
-  return o.type==='market'?'Market, next 9:45 ET bar':'Trigger '+n(o.trigger)}
-function setupName(t){
-  const sh=t.contracts_open??t.contracts;
-  if(t.setup_type&&SETUPN[t.setup_type])return `${SETUPN[t.setup_type]} · ${n(sh,0)} shares`;
-  return `${t.direction==='short'?'Short':'Long'} ${n(sh,0)} shares${t.book==='mambo'?' · your pick':''}`;
-}
+function orderText(t){const o=t.entry_order||{};
+  if(o.kind==='buy_stop')return 'Buy-stop '+n(o.trigger);
+  if(o.kind==='limit_zone')return 'Limit '+n(o.zone[0])+'-'+n(o.zone[1]);
+  return o.type==='market'?'Market':'Trigger '+n(o.trigger)}
+function setupName(t){const sh=t.contracts_open??t.contracts;return t.setup_type&&SETUPN[t.setup_type]?SETUPN[t.setup_type]+' · '+n(sh,0)+' shares':(t.direction==='short'?'Short ':'Long ')+n(sh,0)+' shares'}
 const rrTxt=x=>x==null?'n/a':String(Math.round(x*100)/100);
-function earnTxt(t){const e=t.earnings||{};if(!e.date)return 'n/a';const est=(e.note||'').startsWith('ESTIMATE');return `${dshort(e.date)}${est?' est.':''}`}
+function earnTxt(t){const e=t.earnings||{};if(!e.date)return 'n/a';return dshort(e.date)+((e.note||'').startsWith('ESTIMATE')?' est.':'')}
+function bookEq(b){
+  const k=D.books[b]||{equity:0,pnl:0,pnl_pct:0,start:100000};
+  let d=0,any=false;
+  for(const p of (ACC[b]||{}).positions||[]){ if(!Val.live(p.ticker))continue; d+=Val.deltaPos(p); any=true }
+  return {eq:k.equity+d,d,any,base:k.equity,k};
+}
+function slimBar(t){
+  const lv=(t.reasoning||{}).levels||{}; if(lv.stop==null||lv.t2==null)return '';
+  const cur=spotOf(t); if(cur==null)return '';
+  const p=Math.max(0,Math.min(100,(cur-lv.stop)/(lv.t2-lv.stop)*100));
+  return `<div class="slim" data-slim="${t.id}" data-stop="${lv.stop}" data-t2="${lv.t2}"><i style="width:${p}%"></i></div>`;
+}
+function pxSpan(tk){const q=Prices.get(tk);return `<span data-px="${esc(tk)}">${q?n(q.p):'n/a'}</span>`}
+function badgeHTML(tk){const b=Live.badge(tk);return `<span class="lb ${b.c}" title="${esc(b.title)}"><i></i>${esc(b.short)}</span>`}
 
-/* ---------- charts ---------- */
 function candleChart(t){
   const tc=TECH[t.ticker];const lv=(t.reasoning||{}).levels||{};
-  if(!tc||!tc.candles||!tc.candles.length)return `<div class="empty">Chart data unavailable</div>`;
-  const C=tc.candles.slice(-(innerWidth<480?46:innerWidth<900?60:72)),W=640,H=230,PR=78,PT=12,PB=22;
+  if(!tc||!tc.candles||!tc.candles.length)return '<div class="empty">Chart unavailable</div>';
+  const C=tc.candles.slice(-(innerWidth<480?46:60)),W=640,H=220,PR=72,PT=12,PB=22;
   const ref=entryRef(t),zone=(t.entry_order||{}).kind==='limit_zone'&&t.status==='PENDING'?t.entry_order.zone:null;
   const lv2=[lv.stop,lv.t1,lv.t2,ref,...(zone||[])].filter(x=>x!=null);
-  let lo=Math.min(...C.map(c=>c[3]),...lv2),hi=Math.max(...C.map(c=>c[2]),...lv2);const padv=(hi-lo)*.06;lo-=padv;hi+=padv;
+  let lo=Math.min(...C.map(c=>c[3]),...lv2),hi=Math.max(...C.map(c=>c[2]),...lv2);const pad=(hi-lo)*.06||1;lo-=pad;hi+=pad;
   const y=v=>PT+(hi-v)/(hi-lo)*(H-PT-PB), step=(W-PR)/C.length, bw=Math.max(2,step*.62);
-  let g='';for(let i=0;i<4;i++){const yy=PT+i*(H-PT-PB)/3;g+=`<line class="grid-l" x1="0" x2="${W-PR}" y1="${yy}" y2="${yy}"/>`}
-  let cs='';C.forEach((c,i)=>{const x=i*step+step/2,up=c[4]>=c[1],col=up?'#3ddc97':'#ff6b6b';
-    cs+=`<line x1="${x}" x2="${x}" y1="${y(c[2])}" y2="${y(c[3])}" stroke="${col}" stroke-opacity=".55" stroke-width="1"/>`+
-        `<rect x="${x-bw/2}" y="${y(Math.max(c[1],c[4]))}" width="${bw}" height="${Math.max(1,Math.abs(y(c[1])-y(c[4])))}" rx="1" fill="${col}" fill-opacity="${up?.85:.75}"/>`});
-  const short=t.direction==='short';let zones='',lines='',labels='';
-  if(ref!=null&&lv.stop!=null)zones+=`<rect x="0" width="${W-PR}" y="${Math.min(y(ref),y(lv.stop))}" height="${Math.abs(y(ref)-y(lv.stop))}" fill="#ff6b6b" fill-opacity=".06"/>`;
-  if(zone)zones+=`<rect x="0" width="${W-PR}" y="${y(zone[1])}" height="${Math.max(2,y(zone[0])-y(zone[1]))}" fill="#c9ced6" fill-opacity=".10"/>`;
-  if(ref!=null&&lv.t2!=null)zones+=`<rect x="0" width="${W-PR}" y="${Math.min(y(ref),y(lv.t2))}" height="${Math.abs(y(ref)-y(lv.t2))}" fill="#3ddc97" fill-opacity=".05"/>`;
-  const L=[['Stop',lv.stop,'#ff6b6b','5 4'],[t.status==='PENDING'?((t.entry_order||{}).kind==='buy_stop'?'Buy':'Limit'):'Entry',ref,'#c9ced6','2 4'],['T1',lv.t1,'#5eead4','5 4'],['T2',lv.t2,'#3ddc97','']];
-  const used=[];L.forEach(([nm,v,col,da])=>{if(v==null)return;let yy=y(v);lines+=`<line x1="0" x2="${W-PR}" y1="${yy}" y2="${yy}" stroke="${col}" stroke-width="1.2" stroke-dasharray="${da}" stroke-opacity=".9"/>`;
-    let ly=yy;used.forEach(u=>{if(Math.abs(u-ly)<15)ly=u+(ly>=u?15:-15)});used.push(ly);
-    labels+=`<rect x="${W-PR+6}" y="${ly-9}" width="${PR-8}" height="18" rx="5" fill="${col}" fill-opacity=".14"/><text x="${W-PR+12}" y="${ly+4}" style="fill:${col}">${nm} ${n(v,v>=100?0:2)}</text>`});
-  const last=C[C.length-1],cx=(C.length-1)*step+step/2,cy=y(spotOf(t)||last[4]);
-  const mk=`<line x1="${cx}" x2="${W-PR}" y1="${cy}" y2="${cy}" stroke="#fff" stroke-opacity=".35" stroke-dasharray="1 3"/><circle cx="${cx}" cy="${cy}" r="4.5" fill="#fff"/><circle cx="${cx}" cy="${cy}" r="9" fill="#fff" fill-opacity=".15"/>`;
-  const axis=`<text x="2" y="${H-6}">${dshort(C[0][0])}</text><text x="${W-PR-4}" y="${H-6}" text-anchor="end">${dshort(last[0])}</text>`;
-  return `<div class="chart-wrap" data-tk="${esc(t.ticker)}" data-n="${C.length}" data-step="${step}" data-w="${W}" data-pr="${PR}" data-lo="${lo}" data-hi="${hi}" data-pt="${PT}" data-pb="${PB}" data-h="${H}"><svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(t.ticker)} daily candles with stop, entry and targets. Drag or hover for prices.">${g}${zones}<g class="draw">${cs}</g>${lines}${mk}${labels}${axis}<line class="xh" x1="0" x2="0" y1="${PT}" y2="${H-PB}"/><line class="yh" x1="0" x2="${W-PR}" y1="0" y2="0"/></svg><div class="tip" role="status" aria-live="off"></div></div>`;
+  let g='',cs='';
+  for(let i=0;i<4;i++){const yy=PT+i*(H-PT-PB)/3;g+=`<line class="grid-l" x1="0" x2="${W-PR}" y1="${yy}" y2="${yy}"/>`}
+  C.forEach((c,i)=>{const x=i*step+step/2,up=c[4]>=c[1],col=up?'var(--up)':'var(--down)';
+    cs+=`<line x1="${x}" x2="${x}" y1="${y(c[2])}" y2="${y(c[3])}" stroke="${col}" stroke-width="1"/>`+
+        `<rect x="${x-bw/2}" y="${y(Math.max(c[1],c[4]))}" width="${bw}" height="${Math.max(1,Math.abs(y(c[1])-y(c[4])))}" rx="1" fill="${col}"/>`});
+  let lines='',labels='',used=[];
+  [['Stop',lv.stop,'var(--down)'],['Entry',ref,'var(--label2)'],['T1',lv.t1,'var(--teal)'],['T2',lv.t2,'var(--up)']].forEach(([nm,v,col])=>{
+    if(v==null)return; let yy=y(v); lines+=`<line x1="0" x2="${W-PR}" y1="${yy}" y2="${yy}" stroke="${col}" stroke-dasharray="4 4" stroke-width="1"/>`;
+    let ly=yy; used.forEach(u=>{if(Math.abs(u-ly)<14)ly=u+14}); used.push(ly);
+    labels+=`<text x="${W-PR+6}" y="${ly+4}" fill="${col}">${nm} ${n(v,v>=100?0:2)}</text>`});
+  const cur=spotOf(t)||C[C.length-1][4], cx=(C.length-1)*step+step/2, cy=y(cur);
+  const mk=`<line x1="${cx}" x2="${W-PR}" y1="${cy}" y2="${cy}" stroke="currentColor" stroke-opacity=".35" stroke-dasharray="1 3"/><circle class="now" data-chart-px="${esc(t.ticker)}" cx="${cx}" cy="${cy}" r="4" fill="var(--label)"/>`;
+  return `<div class="chart-wrap" data-tk="${esc(t.ticker)}" data-n="${C.length}" data-step="${step}" data-w="${W}" data-pr="${PR}" data-lo="${lo}" data-hi="${hi}" data-pt="${PT}" data-pb="${PB}" data-h="${H}"><svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t.ticker)} chart">${g}${cs}${lines}${mk}${labels}<line class="xh" y1="${PT}" y2="${H-PB}"/><line class="yh" x2="${W-PR}"/></svg><div class="tip"></div></div>`;
 }
-function progress(t){
-  const lv=(t.reasoning||{}).levels||{};if(lv.stop==null||lv.t2==null)return'';
-  const ref=entryRef(t),cur=spotOf(t);
-  const p=v=>Math.max(0,Math.min(100,(v-lv.stop)/(lv.t2-lv.stop)*100));
-  const lg=[['Stop',lv.stop,'neg'],[t.status==='PENDING'?'Entry':'Filled',ref,''],['T1',lv.t1,'t1c'],['T2',lv.t2,'pos']].filter(x=>x[1]!=null);
-  return `<div class="prog"><div class="track" aria-label="price between stop and T2">
-    <div class="tick l" style="left:0"></div>
-    ${ref!=null?`<div class="tick ent" style="left:${p(ref)}%"></div>`:''}
-    ${lv.t1!=null?`<div class="tick t1t" style="left:${p(lv.t1)}%"></div>`:''}
-    <div class="tick r" style="left:100%"></div>
-    ${cur!=null?`<div class="cur" data-trade="${t.id}" data-stop="${lv.stop}" data-t2="${lv.t2}" style="left:${STATIC?p(cur):0}%" data-left="${p(cur)}"><span>${n(cur)}</span></div>`:''}
-  </div><div class="legend num">${lg.map(([k,v,c])=>`<span><i class="${c}">${k}</i> ${n(v)}</span>`).join('')}</div></div>`;
-}
-function lineChart(series,{h=220,colors=['#8fa2ff','#9aa1ad'],labels=[]}={}){
-  const pts=series[0].filter(v=>v!=null);if(pts.length<2)return null;
-  const W=900,H=h,P=8,all=series.flat().filter(v=>v!=null);let lo=Math.min(...all),hi=Math.max(...all);if(hi-lo<1){hi+=500;lo-=500}
+function lineChart(series,labels){
+  const pts=(series[0]||[]).filter(v=>v!=null); if(pts.length<2)return '';
+  const W=640,H=180,P=8,all=series.flat().filter(v=>v!=null); let lo=Math.min(...all),hi=Math.max(...all); if(hi===lo){hi+=1;lo-=1}
   const y=v=>P+(hi-v)/(hi-lo)*(H-2*P);
-  let out=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block"><defs><linearGradient id="ga" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${colors[0]}" stop-opacity=".28"/><stop offset="1" stop-color="${colors[0]}" stop-opacity="0"/></linearGradient></defs>`;
-  for(let i=0;i<4;i++)out+=`<line x1="0" x2="${W}" y1="${P+i*(H-2*P)/3}" y2="${P+i*(H-2*P)/3}" stroke="rgba(255,255,255,.05)"/>`;
-  series.forEach((s,si)=>{const m=s.length;const xy=s.map((v,i)=>v==null?null:[i/(m-1)*W,y(v)]).filter(Boolean);if(xy.length<2)return;
-    const d='M'+xy.map(p=>p.map(v=>v.toFixed(1)).join(',')).join('L');
-    if(si===0)out+=`<path d="${d}L${xy[xy.length-1][0]},${H}L${xy[0][0]},${H}Z" fill="url(#ga)"/>`;
-    out+=`<path class="${STATIC?'':'drawline'}" d="${d}" fill="none" stroke="${colors[si]}" stroke-width="${si?1.4:2.2}" stroke-dasharray="${si?'4 4':''}" stroke-linejoin="round"/>`});
-  out+=`</svg><div class="num dim" style="display:flex;justify-content:space-between;font-size:11.5px;margin-top:6px"><span>${esc(labels[0]||'')}</span><span>${esc(labels[1]||'')}</span></div>`;
+  let out=`<svg class="eq" viewBox="0 0 ${W} ${H}">`;
+  series.forEach((s,si)=>{const xy=s.map((v,i)=>v==null?null:[i/(s.length-1)*W,y(v)]).filter(Boolean); if(xy.length<2)return;
+    out+=`<path d="M${xy.map(p=>p.map(v=>v.toFixed(1)).join(',')).join('L')}" fill="none" stroke="${si?'var(--label3)':'var(--tint)'}" stroke-width="${si?1.25:2}" stroke-dasharray="${si?'4 3':''}"/>`});
+  out+=`</svg><div class="legend"><span>${esc(labels[0]||'')}</span><span>${esc(labels[1]||'')}</span></div>`;
   return out;
 }
 
-/* ---------- sections ---------- */
-function hero(){
-  const m=D.books.main,s=D.books.shadow,mb=D.books.mambo||{equity:100000,pnl_pct:0};
-  const live=T.filter(t=>t.status==='OPEN'),pend=T.filter(t=>t.status==='PENDING');
-  const liveM=live.filter(t=>t.book==='main'),pendM=pend.filter(t=>t.book==='main');
-  const whole=Math.floor(m.equity),cents=(m.equity-whole).toFixed(2).slice(1);
-  const tickers=a=>a.map(t=>t.ticker).join(', ');
-  let sentence=liveM.length?`<b>${liveM.length} trade${liveM.length>1?'s are':' is'} open</b> (${tickers(liveM)}).`:`<b>No open trades yet.</b>`;
-  if(pendM.length){const vu=(pendM[0].entry_order||{}).valid_until;sentence+=` ${pendM.length} Main swing entry order${pendM.length>1?'s are':' is'} resting (${tickers(pendM)})${vu?', valid through '+dshort(vu):''}: buy-stops for breakouts, limit zones for pullbacks. ${pend.length-pendM.length} next-best setups are tracked in Shadow.`}
-  const nx=((D.next||[]).filter(x=>x.book==='main'))[0];if(nx)sentence+=` Next on the calendar: <b>${esc(nx.label)}</b> on ${dshort(nx.date)}.`;
-  const chip=m.pnl>0?'up':m.pnl<0?'down':'flat';
-  const liveList=(liveM.length?liveM:pendM).slice(0,5).map(t=>{const[st,sc]=status(t),p=pnlOf(t);
-    return `<a class="li" href="#tc-${t.id}" data-tk-row="${t.ticker}"><span class="pill ${sc}" style="min-width:70px;justify-content:center">${st}</span><span class="what"><b>${t.ticker}</b> <span class="mute">${esc(setupName(t))}</span><div class="num dim" style="font-size:12px;margin-top:2px">${esc(orderText(t,1))}${p==null&&(t.entry_order||{}).valid_until?' · to '+dshort(t.entry_order.valid_until):''}</div></span><span class="num ${cls(p)}" style="text-align:right;white-space:nowrap">${p==null?`<span class="mute">${usd(t.max_risk_usd)} risk</span>`:susd(p)}</span></a>`}).join('');
-  const NX=(D.next||[]).filter(x=>x.book==='main');const nextList=(NX.length?NX:(D.next||[])).slice(0,5).map(x=>`<div class="li"><span class="kind ${x.kind}"></span><span class="when num">${dshort(x.date)}</span><span class="what">${esc(x.label)} <span class="dim">· ${daysTo(x.date)}d</span></span></div>`).join('');
-  return `<section class="hero" id="overview"><div class="hero-grid">
-   <div class="card pad reveal" style="padding:30px">
-     <div class="eyebrow">Main paper account · Swing v${esc(D.method.version)}</div>
-     <div class="big num" id="hero-eq"><span data-count="${whole}" data-fmt="usd0">$${n(whole,0)}</span><span class="cents">${cents}</span></div><div class="live-note" id="hero-live"></div>
-     <div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap"><span class="chip ${chip} num">${susd(m.pnl,2)} · ${pct(m.pnl_pct)}</span><span class="mute" style="font-size:13.5px">since ${dshort((D.accounts||{}).inception||'2026-10-07')} · SPY ${pct((ACC.main||{}).spy_return_pct)}</span></div>
-     <p class="lede">${sentence}</p>
-     <div class="mini">${['main','shadow','mambo'].map(b=>{const k=D.books[b]||{equity:100000,pnl_pct:0};return `<div class="m" data-goacct="${b}"><div class="k">${BOOKN[b]} account</div><div class="v num" id="mini-eq-${b}">${usd(k.equity)}</div><div class="num ${cls(k.pnl_pct)}" style="font-size:12px" id="mini-pct-${b}">${pct(k.pnl_pct)}</div></div>`}).join('')}</div>
-   </div>
-   <div class="grid" style="gap:16px">
-     <div class="card pad reveal" style="--d:.08s"><div class="head" style="margin:0 0 6px"><h3>${liveM.length?'Open positions':'What is queued'}</h3><span class="pill ${liveM.length?'live':'pend'}">${liveM.length?liveM.length+' open':pendM.length+' pending'}</span></div><div class="list">${liveList||'<div class="empty">No Main positions.</div>'}</div></div>
-     <div class="card pad reveal" style="--d:.16s"><div class="head" style="margin:0 0 6px"><h3>What's next</h3><span class="dim" style="font-size:12px">earnings · order expiry · time stops</span></div><div class="list">${nextList||'<div class="empty">Nothing scheduled.</div>'}</div></div>
-   </div></div></section>`;
+function dayChange(b){
+  const key=b==='main'?'equity':b+'_equity', H=(D.equity_history||[]).filter(h=>h[key]!=null);
+  const a=H[H.length-1], prev=H[H.length-2];
+  const be=bookEq(b);
+  if(!a||!prev) return {d:be.k.pnl, pct:be.k.pnl_pct, spy:null, label:'since inception'};
+  const d=(be.eq)-(prev[key]);
+  const spy=a.spy&&prev.spy?(a.spy/prev.spy-1)*100:null;
+  const same=String(a.t).slice(0,10)===String(prev.t).slice(0,10);
+  return {d, pct:prev[key]?d/prev[key]*100:null, spy, label:same?'today':'since last check'};
 }
-function accountSec(){
-  return `<section id="account"><div class="head"><div><div class="eyebrow">Paper account</div><h2>Simulated brokerage, fully traceable</h2>
-   <p class="sub">Every recommendation is logged unchanged in the recommendations log, and its paper trade opens and closes at the exact moment and price its rules trigger. Each fill cites the bar or quote used.</p></div>
-   <div class="seg" id="acct-seg">${['main','shadow','mambo'].map(b=>`<button data-acct="${b}" class="${b===state.acct?'on':''}">${BOOKN[b]}</button>`).join('')}</div></div>
-   <div id="acct-body"></div></section>`;
-}
-function renderAccount(){
-  const b=state.acct,a=ACC[b]||{},k=D.books[b]||{};
-  const key=b==='main'?'equity':b+'_equity',H=D.equity_history||[],spy0=(D.accounts||{}).spy_inception_close;
-  const eq=H.map(h=>h[key]).filter(v=>v!=null),spy=H.filter(h=>h[key]!=null).map(h=>h.spy&&spy0?h.spy/spy0*(a.start_cash||100000):null);
-  const ch=lineChart([eq,spy],{labels:[dshort((H.find(h=>h[key]!=null)||{}).t),dshort((H[H.length-1]||{}).t)]});
-  const tiles=[['Account value',`<span id="acct-eq">${usd(a.equity,2)}</span>`,`<span id="acct-eq-s">${pct(a.return_pct)} total</span>`],['Cash',usd(a.cash,2),'start '+usd(a.start_cash)],['Positions',`<span id="acct-mv">${usd(a.market_value,2)}</span>`,(a.open||0)+' open · '+(a.pending||0)+' pending'],
-   ['vs SPY',a.vs_spy_pct==null?'n/a':pct(a.vs_spy_pct),'SPY '+pct(a.spy_return_pct)],['Realized',susd(a.realized,2),(a.closed||0)+' closed'],['Unrealized',`<span id="acct-ur">${susd(a.unrealized,2)}</span>`,`<span id="acct-ur-s">ledger mark</span>`],
-   ['Win rate',a.win_rate==null?'n/a':n(a.win_rate,0)+'%','avg win '+usd(a.avg_win)+' · loss '+usd(a.avg_loss)],['Expectancy',a.expectancy_R==null?'n/a':(a.expectancy_R>0?'+':'')+n(a.expectancy_R,2)+'R','profit factor '+(a.profit_factor??'n/a')],
-   ['Max drawdown',a.max_drawdown_pct==null?'n/a':n(a.max_drawdown_pct,2)+'%','from equity peak'],['T1 hit rate',a.t1_hit_rate==null?'n/a':n(a.t1_hit_rate,0)+'%','of filled trades'],['T2 hit rate',a.t2_hit_rate==null?'n/a':n(a.t2_hit_rate,0)+'%','of filled trades'],['Cancelled',String(a.cancelled||0),b==='mambo'?'not triggered':'incl. retired v1 orders']];
-  const pos=(a.positions||[]).map(p=>`<tr><td><b>${p.ticker}</b><div class="dim num" style="font-size:11.5px;white-space:nowrap">${p.trade_id}<br>${p.rec_id||''}</div></td><td class="num">${p.qty}</td><td class="num">${n(p.avg_entry)}</td><td class="num" data-pos-last="${p.trade_id}">${n(p.last_value)}</td><td class="num" data-pos-mv="${p.trade_id}">${usd(p.market_value)}</td><td class="num ${cls(p.unrealized)}" data-pos-pl="${p.trade_id}">${susd(p.unrealized)}</td><td class="num">${p.stop??''}${p.t1_hit?' <span class="pill t1">T1</span>':''}</td></tr>`).join('');
-  const pend=T.filter(t=>t.book===b&&t.status==='PENDING').map(t=>`<tr><td><b>${t.ticker}</b><div class="dim num" style="font-size:11.5px;white-space:nowrap">${t.id}<br>${t.rec_id||''}</div></td><td class="num">${n(t.contracts,0)}</td><td colspan="4" class="mute" style="font-size:13px">${esc(orderText(t))}${(t.entry_order||{}).valid_until?' · valid through '+dshort(t.entry_order.valid_until):''} · ${usd(t.position_usd||t.max_risk_usd)} · risk ${usd(t.max_risk_usd)}</td><td class="num">${(t.plan||{}).stop??((t.reasoning||{}).levels||{}).stop??''}</td></tr>`).join('');
-  const fl=FILLS.filter(f=>f.account===b).slice().reverse();
-  const fills=fl.map(f=>`<tr id="fill-${f.fill_id}"><td class="num" style="white-space:nowrap">${dshort(f.filled_at)}</td><td><b>${f.ticker}</b> <span class="mute">${esc(f.kind.replace('_',' '))}</span><div class="dim num" style="font-size:11.5px">${f.fill_id} · ${f.rec_id||''}</div></td><td>${esc(f.side.replace(/_/g,' '))}</td><td class="num">${f.kind==='cancel'?'0':f.qty+' '+esc(f.unit||'')}</td><td class="num">${f.fill_price==null?'':n(f.fill_price)}${f.trigger_price!=null?`<div class="dim" style="font-size:11.5px">trigger ${n(f.trigger_price)}</div>`:''}</td><td class="mute" style="font-size:12.5px;min-width:260px">${esc(f.order_type)}<div class="dim">${esc(f.price_source)} · fees ${usd(f.fees,2)}</div></td></tr>`).join('');
-  $('#acct-body').innerHTML=`
-   <div class="grid g4" style="margin-bottom:16px">${tiles.map((x,i)=>`<div class="card tile reveal in" style="--d:${i*.03}s"><div class="k">${x[0]}</div><div class="v num">${x[1]}</div><div class="s num">${x[2]}</div></div>`).join('')}</div>
-   <div class="card pad" style="margin-bottom:16px"><div class="head" style="margin-bottom:12px"><h3>Equity vs SPY</h3><span class="dim" style="font-size:12.5px"><span style="color:var(--acc)">━</span> ${BOOKN[b]} account &nbsp; <span class="mute">┅</span> SPY, same start</span></div>
-     ${ch||`<div class="empty">The curve starts with the first marks. ${a.pending?a.pending+' entry orders are resting; they fill only if the trigger trades in the next 5 sessions.':''}</div>`}</div>
-   <div class="grid g2">
-     <div class="card"><div class="pad" style="padding-bottom:6px"><h3>Positions & working orders</h3></div><div class="tbl-wrap"><table class="stack"><thead><tr><th>Ticker</th><th>Qty</th><th>Entry</th><th>Last</th><th>Value</th><th>P&L</th><th>Stop</th></tr></thead><tbody>${pos+pend||'<tr><td colspan="7" class="empty">No positions.</td></tr>'}</tbody></table></div></div>
-     <div class="card" id="fills"><div class="pad" style="padding-bottom:6px"><h3>Fills ledger</h3><div class="dim" style="font-size:12.5px">Append-only (fills.jsonl). Every fill cites its rec id and price source.</div></div><div class="tbl-wrap" style="max-height:440px;overflow:auto"><table class="stack"><thead><tr><th>Time ET</th><th>Trade</th><th>Side</th><th>Qty</th><th>Price</th><th>Order / source</th></tr></thead><tbody>${fills||`<tr><td colspan="6" class="empty">No fills yet in this account.${(a.pending||0)?' '+a.pending+' orders are working.':''}</td></tr>`}</tbody></table></div></div>
-   </div>`;
-  $$('#acct-seg button').forEach(x=>x.classList.toggle('on',x.dataset.acct===b));
-  animateLines($('#acct-body'));
-}
-function tradeCard(t,i){
-  const[st,sc]=status(t),cf=conf(t),r=t.reasoning||{},lv=r.levels||{},wl=r.why_levels||{},p=pnlOf(t),pl=t.plan||{};
-  const o=t.entry_order||{},ent=entryRef(t),sp=spotOf(t);
-  const f0=(t.fills||[]).find(x=>x.kind!=='cancel'),fl=(t.fills||[]).slice(-1)[0];
-  const ed=(t.earnings||{}).date,edays=daysTo(ed);
-  let strip;
-  if(t.status==='PENDING'){const dist=o.kind==='limit_zone'?(sp/o.zone[1]-1)*100:o.trigger?(o.trigger/sp-1)*100:null;
-    strip=`<span><span class="pill pend">Order resting</span> <span class="mute">${esc(orderText(t))}${o.valid_until?' · valid through '+dshort(o.valid_until):''}${dist!=null&&sp?` · last ${n(sp)} (${o.kind==='limit_zone'?(dist<=0?'inside the zone':pct(dist,1)+' above the zone'):pct(dist,1)+' to trigger'})`:''}</span></span><span class="num mute">${t.id}</span>`}
-  else if(t.status==='CANCELLED')strip=`<span class="mute">Cancelled: ${esc(t.cancel_reason||'')}</span><span class="num mute">${t.id}</span>`;
-  else strip=`<span>Filled <b class="num">${n(f0?f0.fill_price:ent)}</b> <span class="mute num">${dshort(f0?f0.filled_at:t.opened_at)}</span> · <b class="num ${cls(p)}">${susd(p)}</b> ${t.status==='CLOSED'?'final':'open'}</span><a href="#fill-${(fl||f0||{}).fill_id||''}" data-fill="${(fl||f0||{}).fill_id||''}" data-acct="${t.book}" class="num">${t.id} ↗</a>`;
-  const risks=(r.risks||[]).map(x=>`<li>${esc(x)}</li>`).join('');
-  const exitRules=pl.entry?`Stop ${n(lv.stop)} first (every 5-minute bar; a gap below fills at the open). T1 ${n(lv.t1)}: sell half, stop to breakeven. T2 ${n(lv.t2)}: sell the rest. Time stop ${t.time_stop_weeks||pl.time_stop_weeks} weeks after the fill${t.status==='OPEN'&&t.time_stop?' ('+dshort(t.time_stop)+')':''}. Earnings rule at the close before the report.`:esc((t.kill_switch||{}).text||'');
-  const rs=r.error?`<p class="mute">Reasoning unavailable: ${esc(r.error)}</p>`:`
-     ${r.summary?`<p class="sum">${esc(r.summary)}</p>`:''}
-     <h3>Why this stock</h3><p>${esc(r.why_stock)}</p>
-     <h3>Why now</h3><p>${esc(r.why_now)}</p>
-     <h3>Why these levels</h3><p>${esc(wl.entry)}</p><p style="margin-top:8px">${esc(wl.stop)}</p><p style="margin-top:8px">${esc(wl.t1)} ${esc(wl.t2)}</p><p style="margin-top:8px">${esc(wl.realism)}</p>
-     <h3>What could go wrong</h3><ul>${risks}</ul>
-     <h3>Confidence</h3><p>${esc((r.confidence||{}).why)}</p>
-     ${t.book!=='main'&&t.why_not_main_detail?`<h3>Why it is not in the Main account</h3><p>${esc(t.why_not_main_detail)}</p>`:''}
-     ${t.postmortem?`<h3>${t.realized_pnl>0?'Why it worked':'Why it failed'}</h3><p>${esc(t.postmortem.why||t.postmortem.one_liner)}</p>`:''}
-     <h3>Exit rules</h3><p>${exitRules}</p>`;
-  const sz=t.sizing||{};
-  const kv=[
-    ['Entry',`${o.kind==='buy_stop'?'Buy-stop ':o.kind==='limit_zone'?'Limit ':''}${n(ent)}`,''],
-    ['Stop',lv.stop!=null?n(lv.stop):'n/a',`neg" title="${pl.stop_pct!=null?n(pl.stop_pct*100,1)+'% below entry':''}`],
-    ['T1 / T2',`${lv.t1!=null?n(lv.t1,lv.t1>=100?0:2):'n/a'} / ${lv.t2!=null?n(lv.t2,lv.t2>=100?0:2):'n/a'}`,'pos'],
-    ['Time stop',t.status==='OPEN'&&t.time_stop?`${dshort(t.time_stop)} <span class="dim">${daysTo(t.time_stop)}d</span>`:`${t.time_stop_weeks||pl.time_stop_weeks||'n/a'} wks`,''],
-    ['Shares',`${n(t.contracts_open??t.contracts,0)} <span class="dim">${usd(t.position_usd||sz.position_usd)}</span>`,''],
-    ['Risk',`${usd(t.max_risk_usd)}${t.risk_pct_of_equity!=null?` <span class="dim">${n(t.risk_pct_of_equity,2)}%</span>`:''}`,''],
-    ['R:R',rrTxt(t.rr??pl.rr),''],
-    [t.status==='OPEN'||t.status==='CLOSED'?'P&L':'Earnings',t.status==='OPEN'||t.status==='CLOSED'?(p==null?'n/a':susd(p)):`${earnTxt(t)}${edays!=null&&edays>=0?` <span class="dim">${edays}d</span>`:''}`,t.status==='OPEN'||t.status==='CLOSED'?cls(p):(t.earnings||{}).trading_days_away!=null&&(t.earnings||{}).trading_days_away<=10?'warn':'']];
-  return `<article class="card hov tc reveal" id="tc-${t.id}" style="--d:${Math.min(i,8)*.05}s">
-   <div class="tc-h"><div><div class="tk">${t.ticker}</div><div class="setup">${esc(setupName(t))}${t.sector?` <span class="dim">· ${esc(t.sector)}</span>`:''}</div></div>
-     <div class="pills"><span class="pill ${sc}">${st}</span>${cf?`<span class="pill ${cf[1]}">${cf[0]}</span>`:''}${t.book!=='main'?`<span class="pill acc">${BOOKN[t.book]}</span>`:''}${(t.scores||{}).total!=null?`<span class="pill num">${n(t.scores.total,0)}/100</span>`:''}</div></div>
-   ${candleChart(t)}
-   ${progress(t)}
-   ${t.status==='OPEN'||t.status==='PENDING'?`<div class="liverow" data-trade="${t.id}"></div>`:''}
-   <div class="kv">${kv.map(([k,v,c])=>`<div><div class="k">${k}</div><div class="v num ${c}"${k==='P&L'?` data-pnl="${t.id}"`:''}>${v}</div></div>`).join('')}</div>
-   <div class="strip">${strip}</div>
-   <button class="drawer-btn" aria-expanded="false"><span>Why this trade${(r.confidence||{}).rating?` <span class="mute" style="font-weight:400">· ${esc(r.confidence.rating)} confidence</span>`:''}</span><svg class="chev" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></button>
-   <div class="drawer"><div><div class="rs">${rs}</div></div></div>
-   <div class="foot"><span>${t.id} · rec ${t.rec_id||'n/a'}</span><span>method v${t.method_version} · issued ${dshort(t.created_at)} ET</span></div>
-  </article>`;
-}
-function tradesSec(){
-  const cnt=b=>T.filter(t=>(b==='all'||t.book===b)&&t.status!=='CANCELLED').length;
-  return `<section id="trades"><div class="head"><div><div class="eyebrow">Swing setups</div><h2>Every setup, with its reasoning and its paper trade</h2>
-   <p class="sub">Main = the best setups the rules allow (max 5, max 2 per sector, sized to the cash on hand). Shadow = the next-best setups that one rule kept out, tracked the same way so we learn which rules help. Mambo = your own picks (<span class="num">run.py add-rec</span>).</p></div>
-   <div class="seg" id="rec-seg">${['main','shadow','mambo','all'].map(b=>`<button data-recs="${b}" class="${b===state.recs?'on':''}">${b==='all'?'All':BOOKN[b]} <span class="dim num">${cnt(b)}</span></button>`).join('')}</div></div>
-   <div class="cards" id="cards"></div></section>`;
-}
-function renderCards(){
-  const b=state.recs,order={OPEN:0,PENDING:1,CLOSED:2,CANCELLED:3};
-  const ts=T.filter(t=>b==='all'||t.book===b).sort((x,y)=>order[x.status]-order[y.status]||(x.book==='main'?0:1)-(y.book==='main'?0:1)||((y.scores||{}).total||0)-((x.scores||{}).total||0));
-  $('#cards').innerHTML=ts.map(tradeCard).join('')||`<div class="card empty" style="grid-column:1/-1">No recommendations in this account yet.${b==='mambo'?' Log one with: python run.py add-rec TICKER --entry 52.40 --stop 48.80 --reason "..." (T1 +10% and T2 +20% by default)':''}</div>`;
-  $$('#rec-seg button').forEach(x=>x.classList.toggle('on',x.dataset.recs===b));
-  observe($('#cards'));
-}
-function activitySec(){
-  const ev=(D.alerts||[]).slice(0,16).map(a=>`<div class="ev ${a.type}"><div class="t">${dshort(a.t)} ET · ${esc(a.type.replace('_',' '))}${a.book?' · '+esc(BOOKN[a.book]||a.book):''}</div><div class="x">${esc(a.text.length>320?a.text.slice(0,320)+'…':a.text)}</div></div>`).join('');
-  const pm=(D.postmortems||[]).slice(0,6).map(p=>`<div class="li"><span class="pill ${p.outcome==='win'?'live':p.outcome==='loss'?'lo':'closed'}">${esc(p.outcome)}</span><span class="what">${esc(p.why||p.one_liner)}<div class="dim num" style="font-size:11.5px">${p.trade_id} · ${p.r_multiple!=null?(p.r_multiple>0?'+':'')+n(p.r_multiple,2)+'R':''}</div></span></div>`).join('');
-  return `<section id="activity"><div class="head"><div><div class="eyebrow">Activity</div><h2>Alerts and post-mortems</h2><p class="sub">The same alerts are written to out/alerts_full.md on every scan and mark, ready to send as is.</p></div></div>
-   <div class="grid g2 top"><div class="card pad reveal"><h3 style="margin-bottom:16px">Latest alerts</h3><div class="tl scrolly">${ev||'<div class="empty">No alerts yet.</div>'}</div></div>
-   <div class="card pad reveal" style="--d:.08s"><h3 style="margin-bottom:6px">Post-mortems</h3><p class="mute" style="font-size:13.5px;margin:0 0 6px">Written automatically when a trade closes: exit type (stop, breakeven stop, T2, time stop, earnings exit), entry slippage vs the trigger, best and worst excursion (MFE/MAE in R), what it gave back, and the lesson.</p><div class="list">${pm||'<div class="empty">None yet. The first one is written when a trade closes.</div>'}</div></div></div></section>`;
-}
-function learningSec(){
-  const rv=D.review||{},gates=rv.gates||[],cal=rv.calibration||{},props=rv.proposals||[];
-  const vers=(D.versions||[]).map(v=>`<div class="vstep"><div style="display:flex;gap:8px;align-items:center"><span class="pill ${v.status==='active'?'live':'closed'}">v${esc(v.version)}</span><span class="dim num" style="font-size:12px">${dshort(v.date)}</span></div><p class="mute" style="font-size:13px;margin:10px 0 0">${esc((v.changes||[]).join(' '))}</p></div>`).join('');
-  const CH=(D.challengers||[]),retired=CH.filter(c=>c.status==='retired').length;
-  const ch=CH.filter(c=>c.status!=='retired').map(c=>{const g=gates.find(x=>x.challenger===c.id)||{};
-    return `<tr><td><b class="num">${esc(c.id)}</b><div class="dim" style="font-size:12px">${esc(c.tag||c.bucket||'')}</div></td><td style="min-width:260px;font-size:13px" class="mute">${esc(c.hypothesis)}</td><td><span class="pill ${c.status==='active'?'acc':c.status==='promoted'?'live':'closed'}">${esc(c.status)}</span></td><td class="num">${g.n_closed??0} / ${g.n_open??0}</td><td class="num">${g.avg_R==null?'n/a':n(g.avg_R,2)+'R'}</td><td style="font-size:12.5px;min-width:220px" class="mute">${esc(g.verdict||'')}</td></tr>`}).join('');
-  const rules=(rv.rules||[]).map(x=>`<li>${esc(x)}</li>`).join('');
-  const ds=rv.risk_state||{};
-  return `<section id="learning"><div class="head"><div><div class="eyebrow">How the method is learning</div><h2>Champion vs challengers, with guard rails</h2>
-   <p class="sub">The Main rules are the champion. Each swing filter (rank, sector cap, earnings window, stop width, reward:risk, score, liquidity, regime) has a challenger running in the Shadow account. Changes ship only on strong evidence, one at a time, with a changelog and rollback.</p></div>
-   <span class="pill ${D.method.risk_mode==='NORMAL'?'live':'lo'}">Risk mode ${esc(D.method.risk_mode)}</span></div>
-   <div class="grid g4" style="margin-bottom:16px">
-     <div class="card tile reveal"><div class="k">Method version</div><div class="v num">v${esc(D.method.version)}</div><div class="s">${(D.versions||[]).length} version(s) logged</div></div>
-     <div class="card tile reveal" style="--d:.04s"><div class="k">Main drawdown</div><div class="v num">${n(ds.main_drawdown_pct,1)}%</div><div class="s">DEFENSIVE at 5%</div></div>
-     <div class="card tile reveal" style="--d:.08s"><div class="k">Loss streak</div><div class="v num">${ds.main_loss_streak??0}</div><div class="s">DEFENSIVE at 3</div></div>
-     <div class="card tile reveal" style="--d:.12s"><div class="k">Proposed changes</div><div class="v num">${props.length}</div><div class="s">${esc((D.method.last_review||{}).t||'')}</div></div></div>
-   <div class="card reveal" style="margin-bottom:16px"><div class="pad" style="padding-bottom:4px"><h3>Version timeline</h3></div><div class="vt">${vers}</div></div>
-   <div class="card reveal" style="margin-bottom:16px"><div class="pad" style="padding-bottom:4px"><h3>Challengers and gate effectiveness</h3><div class="dim" style="font-size:12.5px">Shadow setups kept out by each rule vs the Main account, by average R. Closed / open counts.${retired?` ${retired} v1 options/cascade challengers were retired with the strategy change.`:''}</div></div>
-     <div class="tbl-wrap"><table class="stack"><thead><tr><th>Challenger</th><th>Hypothesis</th><th>Status</th><th>Trades</th><th>Avg R</th><th>Verdict</th></tr></thead><tbody>${ch}</tbody></table></div></div>
-   <div class="grid g2">
-     <div class="card pad reveal"><h3>Calibration</h3><p class="mute" style="font-size:14px">${esc(cal.verdict||'')}</p>${props.length?'<h3 style="margin-top:16px">Proposals</h3><ul class="mute">'+props.map(p=>`<li>[${esc(p.strength)}] ${esc(p.change)}</li>`).join('')+'</ul>':'<p class="dim" style="font-size:13.5px">No proposals: no bucket has enough closed trades. That is the overfitting guard working.</p>'}</div>
-     <div class="card pad reveal" style="--d:.06s"><h3>Rules in force</h3><ul class="mute" style="font-size:13.5px;padding-left:18px">${rules}</ul></div></div>
-   <details class="card acc reveal" style="margin-top:16px;border-top:1px solid var(--line)"><summary><h3>Changelog</h3><svg class="chev" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></summary><pre style="white-space:pre-wrap;padding:0 20px 20px;margin:0;font:12.5px/1.6 var(--mono);color:var(--mute)">${esc(D.changelog||'')}</pre></details>
+
+function homeView(){
+  const b=state.acct||'main', be=bookEq(b), ch=dayChange(b);
+  const open=T.filter(t=>t.book===b&&t.status==='OPEN');
+  const pend=T.filter(t=>t.book===b&&t.status==='PENDING');
+  const nx=(D.next||[]).filter(x=>x.book===b).slice(0,4);
+  const row=t=>{
+    const pl=shownPnl(t);
+    return `<button class="cell" data-trade="${t.id}">
+      <div class="c1"><b>${esc(t.ticker)}</b><span class="sub2">${esc(setupName(t))}</span></div>
+      <div class="c2"><b class="num" data-px="${esc(t.ticker)}">${n(spotOf(t))}</b>${badgeHTML(t.ticker)}</div>
+      <div class="c3 num ${cls(pl)}" data-pl="${t.id}">${pl==null?'':susd(pl,0)}</div>
+      ${slimBar(t)}
+    </button>`;
+  };
+  return `<section id="overview" data-screen="home">
+    <div class="acctseg seg" role="tablist">${['main','shadow','mambo'].map(x=>`<button data-acct="${x}" class="${x===b?'on':''}" role="tab">${BOOKN[x]}</button>`).join('')}</div>
+    <p class="eyebrow">${BOOKN[b]} paper account</p>
+    <p class="value num" id="hero-eq" data-eq="${b}">${usd(be.eq,2)}</p>
+    <p class="delta num ${cls(ch.d)}" id="hero-day">${ch.d==null?'':susd(ch.d,2)} ${ch.pct==null?'':pct(ch.pct)} <span class="sub2">${ch.label}${ch.spy==null?'':` · S&P 500 ${pct(ch.spy)}`}</span></p>
+    <p class="hair" id="hero-live"></p>
+    ${open.length?`<h2 class="group-h">Open</h2><div class="group">${open.map(row).join('')}</div>`:`<div class="group"><div class="empty">No open positions.</div></div>`}
+    ${pend.length?`<h2 class="group-h">Pending</h2><div class="group">${pend.map(t=>`<button class="cell" data-trade="${t.id}"><div class="c1"><b>${esc(t.ticker)}</b><span class="sub2">${esc(orderText(t))}${(t.entry_order||{}).valid_until?' · through '+dshort(t.entry_order.valid_until):''}</span></div><div class="c2"><b class="num" data-px="${esc(t.ticker)}">${n(spotOf(t))}</b>${badgeHTML(t.ticker)}</div></button>`).join('')}</div>`:''}
+    ${nx.length?`<h2 class="group-h">Attention</h2><div class="group">${nx.map(x=>`<div class="cell static"><div class="c1"><b>${dshort(x.date)}</b><span class="sub2">${esc(x.label)}</span></div><div class="c3 sub2">${daysTo(x.date)}d</div></div>`).join('')}</div>`:''}
+    <p class="fine">P&amp;L uses the exit value, last price minus 0.2% paper slippage. The price on each row is the last trade, the same number everywhere. Official fills come only from the scheduled 5-minute bar checks.</p>
   </section>`;
 }
-function scanSec(){
-  const S=D.scan||{};if(!S.funnel)return '';
-  const g=S.regime||{},F=S.funnel,SC=S.setup_counts||{},tot=Object.values(SC).reduce((a,b)=>a+b,0)||1;
-  const fun=[['Universe',F.universe,'S&P 500 + 400 + Nasdaq-100 + catalyst names'],['With data',F.with_data,'daily bars on '+dshort(S.bar_date)],['Liquid',F.liquid,'price > $5, $20M+/day'],['Setups found',F.uptrend_or_setup,'passed a setup detector'],['Main',S.n_main,'orders resting'],['Shadow',S.n_shadow,'tracked']];
-  const setups=Object.entries(SC).map(([k,v])=>`<div class="srow"><span>${esc(SETUPN[k]||k)}</span><div class="bar"><i style="--w:${v/tot*100}%"></i></div><span class="num">${v}</span></div>`).join('');
-  const rows=(S.candidates||[]).slice(0,25).map((c,i)=>{const fl=(c.flags||[]).map(f=>`<span class="pill lo" style="font-size:11px">${esc(f.replace('_',' '))}</span>`).join(' ');
-    const bk=c.booked?`<span class="pill ${c.booked==='main'?'live':'acc'}">${BOOKN[c.booked]}</span>`:'';
-    return `<tr${c.booked?` data-goto="${esc(c.ticker)}"`:''}><td class="num dim">${i+1}</td><td><b>${esc(c.ticker)}</b><div class="dim" style="font-size:12px;max-width:170px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.name||'')}</div></td><td>${esc(SETUPN[c.setup]||c.setup)}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="bar" style="width:70px;min-width:70px"><i style="--w:${c.score}%"></i></div><span class="num">${n(c.score,0)}</span></div></td><td class="num">${c.rs_rating}</td><td class="num">${n(c.close)}</td><td class="num">${c.order_kind==='buy_stop'?'stop ':'limit '}${n(c.entry)}<div class="dim" style="font-size:11.5px">${pct(c.distance_to_entry*100,1)}</div></td><td class="num neg">-${n(c.stop_pct*100,1)}%</td><td class="num">${rrTxt(c.rr)}</td><td class="num" style="white-space:nowrap">${c.earnings_date?dshort(c.earnings_date)+((c.earnings_note||'').startsWith('ESTIMATE')?' est.':''):'n/a'}${c.earnings_in_tdays!=null?`<div class="dim" style="font-size:11.5px">${c.earnings_in_tdays} tdays</div>`:''}</td><td style="min-width:120px">${bk} ${fl}${!bk&&!fl?'<span class="dim" style="font-size:12px">not tracked (rank)</span>':''}</td></tr>`}).join('');
-  return `<section id="scan"><div class="head"><div><div class="eyebrow">Swing scan · ${dshort(S.bar_date)} close</div><h2>From ${n(F.universe,0)} stocks to ${S.n_main} orders</h2>
-   <p class="sub">Daily bars for the whole liquid US universe, four setup detectors, then a 0-100 score (relative strength, trend, setup quality, reward:risk, distance to entry, sector, catalyst, earnings timing). Earnings dates and market caps are checked for the top 70.</p></div>
-   <span class="pill ${g.state==='risk-off'?'lo':'live'}">Market ${esc(g.state||'')}</span></div>
-   <div class="grid g6 funnel" style="margin-bottom:16px">${fun.map((x,i)=>`<div class="card tile reveal" style="--d:${i*.04}s"><div class="k">${x[0]}</div><div class="v num">${x[1]??'n/a'}</div><div class="s">${x[2]}</div></div>`).join('')}</div>
-   <div class="grid g2" style="margin-bottom:16px;grid-template-columns:1fr 1.4fr">
-     <div class="card pad reveal"><h3 style="margin-bottom:12px">Market regime</h3><p class="mute" style="font-size:14px;margin:0">SPY closed <b class="num" style="color:var(--text)">${n(g.spy_close)}</b>: ${pct((g.spy_close/g.spy_sma50-1)*100,1)} vs its 50-day (${n(g.spy_sma50)}) and ${pct((g.spy_close/g.spy_sma200-1)*100,1)} vs its 200-day (${n(g.spy_sma200)}); ${pct(g.spy_r63*100,1)} over 3 months. ${g.state==='risk-off'?'Below the 200-day: new Main entries are blocked (regime flag).':'Above the 200-day, so new long entries are allowed.'}</p></div>
-     <div class="card pad reveal" style="--d:.06s"><h3 style="margin-bottom:12px">Setups found</h3>${setups}</div></div>
-   <div class="card reveal"><div class="pad" style="padding-bottom:6px"><h3>Top candidates</h3><div class="dim" style="font-size:12.5px">Ranked by score. Red tags are the rules that keep a setup out of Main. Tap a booked row to jump to its card.</div></div>
-   <div class="cand-m">${(S.candidates||[]).slice(0,25).map((c,i)=>`<div class="cm"${c.booked?` data-goto="${esc(c.ticker)}"`:''}><div class="cm-h"><span class="num dim">${i+1}</span><b>${esc(c.ticker)}</b><span class="mute">${esc(SETUPN[c.setup]||c.setup)}</span><span class="num sc">${n(c.score,0)}</span></div><div class="cm-b num">RS ${c.rs_rating} · ${c.order_kind==='buy_stop'?'stop':'limit'} ${n(c.entry)} (${pct(c.distance_to_entry*100,1)}) · stop -${n(c.stop_pct*100,1)}% · R:R ${rrTxt(c.rr)} · earn ${c.earnings_date?dshort(c.earnings_date)+((c.earnings_note||'').startsWith('ESTIMATE')?' est.':''):'n/a'}</div><div class="cm-t">${c.booked?`<span class="pill ${c.booked==='main'?'live':'acc'}">${BOOKN[c.booked]}</span> `:''}${(c.flags||[]).map(f=>`<span class="pill lo" style="font-size:11px">${esc(f.replace('_',' '))}</span>`).join(' ')}${!c.booked&&!(c.flags||[]).length?'<span class="dim" style="font-size:12px">not tracked (rank)</span>':''}</div></div>`).join('')}</div>
-   <div class="tbl-wrap cand-t"><table><thead><tr><th>#</th><th>Ticker</th><th>Setup</th><th>Score</th><th>RS</th><th>Close</th><th>Entry</th><th>Stop</th><th>R:R</th><th>Earnings</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div></div></section>`;
-}
-function recordSec(){
-  const rows=RECS.slice().reverse().map(r=>`<tr><td class="num"><b>${r.rec_id}</b>${r.supersedes?`<div class="dim" style="font-size:11.5px">revises ${r.supersedes}</div>`:''}${r.superseded_by?`<div class="warn" style="font-size:11.5px">revised by ${r.superseded_by}</div>`:''}</td><td class="num dim" style="white-space:nowrap">${dshort(r.issued_at)}</td><td><span class="pill ${r.account==='main'?'acc':''}">${BOOKN[r.account]||r.account}</span><div class="dim" style="font-size:11.5px">${esc(r.source)}</div></td><td><b>${esc(r.ticker)}</b> <span class="mute">${esc((r.setup_type||'').replace(/_/g,' '))}</span>${r.record_type==='cancellation'?' <span class="pill cxl" style="font-size:11px">cancellation</span>':''}<div class="dim num" style="font-size:11.5px">v${esc(r.method_version||'1.0')}</div></td><td class="num">${r.stop==null?'<span class="dim">n/a</span>':`${r.stop} / ${r.t1??''} / ${r.t2??''}`}</td><td class="num"><a href="#tc-${r.trade_id}" style="color:var(--acc)">${r.trade_id||''}</a></td><td class="mute" style="font-size:13px;min-width:200px">${esc(r.paper_outcome)}</td></tr>`).join('');
-  return `<section id="record"><div class="head"><div><div class="eyebrow">Track record</div><h2>Recommendations log → paper outcome</h2><p class="sub">recs.jsonl is append-only and hash-chained (python run.py verify-recs). A revision or cancellation is a new linked record; the original is never edited. The 14 v1 options/cascade recommendations were cancelled this way when the strategy changed to swing trades.</p></div></div>
-   <div class="card reveal"><div class="tbl-wrap" style="max-height:620px;overflow:auto"><table class="stack"><thead><tr><th>Rec</th><th>Issued ET</th><th>Account</th><th>Setup</th><th>Stop / T1 / T2</th><th>Paper trade</th><th>Outcome</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="empty">No recommendations logged.</td></tr>'}</tbody></table></div></div></section>`;
-}
-function glossarySec(){
-  return `<section id="glossary"><div class="head"><div><div class="eyebrow">Glossary</div><h2>Plain-English terms</h2></div></div><div class="gl reveal">${Object.entries(D.glossary||{}).map(([k,v])=>`<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('')}</div></section>`;
-}
-function footer(){return `<footer><div style="display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap"><div>Paper trading only. Not financial advice. <b style="color:var(--mute);font-weight:500">Official paper fills are booked only by the scheduled checks on 5-minute bar data</b>; live prices in this app are informational and never create a fill. ${esc(D.fill_policy)}</div><div class="num">Ledger ${esc(D.generated_at||D.built_at)} · app ${esc(APP_VERSION)}</div></div></footer>`}
 
-/* ---------- motion ---------- */
-let io;
-function observe(root){
-  const els=$$('.reveal:not(.in)',root||document);
-  if(STATIC||!('IntersectionObserver' in window)){els.forEach(e=>e.classList.add('in'));$$('.cur',root||document).forEach(c=>c.style.left=c.dataset.left+'%');return}
-  io=io||new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){const el=e.target;el.classList.add('in');$$('.cur',el).forEach(c=>setTimeout(()=>c.style.left=c.dataset.left+'%',350));io.unobserve(el)}}),{threshold:.08,rootMargin:'0px 0px -40px 0px'});
-  els.forEach(e=>io.observe(e));
-}
-function counters(){
-  $$('[data-count]').forEach(el=>{const to=+el.dataset.count;if(STATIC){return}
-    const from=to*0.985,t0=performance.now(),dur=1300;const step=now=>{const k=Math.min(1,(now-t0)/dur),e=1-Math.pow(1-k,3);el.textContent='$'+n(from+(to-from)*e,0);if(k<1)requestAnimationFrame(step)};requestAnimationFrame(step)});
-}
-function animateLines(root){
-  if(STATIC)return;$$('path.drawline',root).forEach(p=>{const L=p.getTotalLength();p.style.strokeDasharray=p.getAttribute('stroke-dasharray')||L;if(!p.getAttribute('stroke-dasharray')){p.style.strokeDasharray=L;p.style.strokeDashoffset=L;p.getBoundingClientRect();p.style.transition='stroke-dashoffset 1.6s cubic-bezier(.2,.7,.2,1)';p.style.strokeDashoffset=0}});
+function positionsView(){
+  const b=state.recs||'main';
+  const order={OPEN:0,PENDING:1,CLOSED:2,CANCELLED:3};
+  const ts=T.filter(t=>b==='all'||t.book===b).sort((x,y)=>(order[x.status]-order[y.status])||((y.scores||{}).total||0)-((x.scores||{}).total||0));
+  const row=t=>{const [st,sc]=status(t), pl=shownPnl(t);
+    return `<button class="cell" data-trade="${t.id}">
+      <div class="c1"><b>${esc(t.ticker)}</b><span class="sub2">${esc(BOOKN[t.book]||'')} · ${esc(setupName(t))}</span></div>
+      <div class="c2"><span class="pill ${sc}">${st}</span></div>
+      <div class="c3"><b class="num" data-px="${esc(t.ticker)}">${spotOf(t)==null?'':n(spotOf(t))}</b><span class="num ${cls(pl)}">${pl==null?'':susd(pl,0)}</span></div>
+    </button>`};
+  return `<section data-screen="positions">
+    <div class="seg">${['main','shadow','mambo','all'].map(x=>`<button data-recs="${x}" class="${x===b?'on':''}">${x==='all'?'All':BOOKN[x]}</button>`).join('')}</div>
+    <div class="group">${ts.map(row).join('')||'<div class="empty">Nothing in this book.</div>'}</div>
+  </section>`;
 }
 
+function detailHTML(t){
+  const r=t.reasoning||{}, lv=r.levels||{}, wl=r.why_levels||{}, pl=t.plan||{};
+  const [st,sc]=status(t), p=shownPnl(t), cf=conf(t);
+  const risks=(r.risks||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+  const fills=(t.fills||[]).map(f=>`<div class="cell static"><div class="c1"><b>${esc(f.kind)}</b><span class="sub2">${dshort(f.filled_at)} · ${esc(f.price_source||'')}</span></div><div class="c3 num">${f.fill_price==null?'':n(f.fill_price)}</div></div>`).join('');
+  return `<div class="sheet-h"><button class="x" data-close aria-label="Close">Close</button><div class="grab"></div></div>
+    <div class="sheet-body" id="sheet-body">
+      <p class="eyebrow">${esc(BOOKN[t.book]||'')} · ${esc(st)}</p>
+      <h2 class="sheet-title">${esc(t.ticker)} <span class="num livepx" data-px="${esc(t.ticker)}">${n(spotOf(t))}</span></h2>
+      <p class="sub2">${badgeHTML(t.ticker)} ${esc(setupName(t))}${cf?' · '+esc(cf[0])+' confidence':''}</p>
+      <p class="delta num ${cls(p)}">${p==null?'':susd(p,2)+' paper'}</p>
+      ${candleChart(t)}
+      ${slimBar(t)}
+      <div class="kv">
+        <div><span>Entry</span><b class="num">${n(entryRef(t))}</b></div>
+        <div><span>Stop</span><b class="num down">${lv.stop!=null?n(lv.stop):'n/a'}</b></div>
+        <div><span>T1</span><b class="num">${lv.t1!=null?n(lv.t1):'n/a'}</b></div>
+        <div><span>T2</span><b class="num up">${lv.t2!=null?n(lv.t2):'n/a'}</b></div>
+        <div><span>Shares</span><b class="num">${n(t.contracts_open??t.contracts,0)}</b></div>
+        <div><span>Risk</span><b class="num">${usd(t.max_risk_usd)}</b></div>
+        <div><span>R:R</span><b class="num">${rrTxt(t.rr??pl.rr)}</b></div>
+        <div><span>Time stop</span><b>${t.time_stop?dshort(t.time_stop):((t.time_stop_weeks||pl.time_stop_weeks||'n/a')+' wks')}</b></div>
+        <div><span>Earnings</span><b>${earnTxt(t)}</b></div>
+        <div><span>Order</span><b>${esc(orderText(t))}</b></div>
+      </div>
+      <div class="prose">
+        ${r.summary?`<p>${esc(r.summary)}</p>`:''}
+        ${r.why_stock?`<h3>Why this stock</h3><p>${esc(r.why_stock)}</p>`:''}
+        ${r.why_now?`<h3>Why now</h3><p>${esc(r.why_now)}</p>`:''}
+        ${wl.entry?`<h3>Why these levels</h3><p>${esc(wl.entry)}</p><p>${esc(wl.stop||'')}</p><p>${esc(wl.t1||'')} ${esc(wl.t2||'')}</p>`:''}
+        ${risks?`<h3>What could go wrong</h3><ul>${risks}</ul>`:''}
+        ${(r.confidence||{}).why?`<h3>Confidence</h3><p>${esc(r.confidence.why)}</p>`:''}
+        ${t.why_not_main_detail?`<h3>Why it is not in Main</h3><p>${esc(t.why_not_main_detail)}</p>`:''}
+        ${t.postmortem?`<h3>After the close</h3><p>${esc(t.postmortem.why||t.postmortem.one_liner||'')}</p>`:''}
+      </div>
+      <p class="fine">${esc(t.id)} · rec ${esc(t.rec_id||'n/a')} · method v${esc(t.method_version||'')} · issued ${dshort(t.created_at)} ET</p>
+      ${fills?`<h2 class="group-h">Fills</h2><div class="group">${fills}</div>`:''}
+    </div>`;
+}
 
-/* ---------- live prices (Finnhub, user's own key, this device only) ---------- */
-const KEY_LS='sd.finnhub.key';
-const Live={
-  px:{},          // ticker -> {p, t (epoch ms), src: 'ws'|'rest'|'ledger', pc (previous close), via}
-  ws:null, state:'nokey', err:'', lastTick:0, retry:0, timer:null, manualClose:false, subs:[], pollT:null,
-  key(){try{return localStorage.getItem(KEY_LS)||''}catch(e){return ''}},
-  setKey(k){try{k?localStorage.setItem(KEY_LS,k):localStorage.removeItem(KEY_LS)}catch(e){}},
-  symbols(){const s=['SPY'];for(const b of ['main','shadow','mambo'])for(const t of T)if(t.book===b&&(t.status==='OPEN'||t.status==='PENDING')&&!s.includes(t.ticker))s.push(t.ticker);return s.slice(0,50)},
-  quote(tk){return this.px[tk]||null},
-  seed(){/* ledger prices from data.json: never overwrite a fresher live/rest price */
-    for(const[tk,q]of Object.entries((D&&D.quotes)||{})){const t=parseET(q.as_of)||Date.parse(q.as_of)||0,cur=this.px[tk];
-      if(!cur||(cur.src==='ledger'&&t>=cur.t)||t>cur.t)this.px[tk]={p:q.price,t,src:'ledger',pc:q.prev_close,via:q.source,close_date:q.close_date}}},
-  /* how a price should be labelled right now */
-  badge(tk){const q=this.px[tk],now=Date.now(),mk=Market.status(now);
-    if(!q||q.p==null)return{c:'none',short:'n/a',long:'No price'};
-    const age=now-q.t,tm=etParts(q.t).hms;
-    if(!mk.open){const lc=Market.lastClose(now);
-      if(lc&&q.t>=lc-5*6e4)return{c:'closed',short:'close',long:`Last close ${dshort(etParts(q.t).date)}`+(q.src==='ledger'?' · ledger':' · Finnhub')};
-      return{c:'closed',short:dshort(etParts(q.t).date),long:`Last seen ${dshort(etParts(q.t).date)} ${tm.slice(0,5)} ET`+(q.src==='ledger'?' · ledger':' · Finnhub')}}
-    if(q.src==='ws'&&age<120e3&&this.state==='live')return{c:'live',short:tm,long:`LIVE ${tm} ET · Finnhub`};
-    if(q.src==='rest'&&age<90e3)return{c:'fresh',short:tm,long:`Quote ${tm} ET · Finnhub`};
-    return{c:'delayed',short:'Delayed '+fmtAge(age).split(' ')[0],long:`Delayed ${fmtAge(age)} · ${q.src==='ledger'?'ledger price from '+tm.slice(0,5)+' ET':'Finnhub '+tm+' ET'}`}},
-  refClose(tk){/* reference close for the day change */const q=this.px[tk];if(!q)return null;
-    if(q.pc!=null&&q.src!=='ledger')return q.pc;const L=((D&&D.quotes)||{})[tk];if(!L)return null;
-    const today=etParts().date;return L.close_date&&L.close_date<today?L.close:L.prev_close},
-  async rest(sym){const r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${encodeURIComponent(this.key())}`,{cache:'no-store'});
-    if(r.status===401||r.status===403)throw Object.assign(new Error('Finnhub rejected the key ('+r.status+')'),{auth:true});
-    if(r.status===429)throw Object.assign(new Error('Finnhub rate limit reached (429): wait a minute'),{rate:true});
-    if(!r.ok)throw new Error('Finnhub HTTP '+r.status);
-    const j=await r.json();if(j.error)throw Object.assign(new Error(j.error),{auth:/key/i.test(j.error)});return j},
-  async test(k){const old=this.key();this.setKey(k);try{const j=await this.rest('SPY');
-      if(!j||!j.c)return{ok:false,msg:'Key accepted, but no SPY price returned (symbol not covered on this plan?)'};
-      return{ok:true,msg:`Connected. SPY ${n(j.c)} at ${etParts(j.t*1000).hms} ET (Finnhub quote).`}}
-    catch(e){return{ok:false,msg:e.message||'Network error reaching finnhub.io'}}finally{this.setKey(old)}},
-  async snapshot(){const syms=this.symbols();for(const s of syms){try{const j=await this.rest(s);
-        if(j&&j.c){const cur=this.px[s],t=j.t?j.t*1000:Date.now();if(!cur||cur.src!=='ws'||t>cur.t)this.px[s]={p:j.c,t,src:'rest',pc:j.pc,via:'Finnhub quote'}}}
-      catch(e){if(e.auth){this.fail(e.message);return false}if(e.rate){this.err=e.message;break}}
-      await new Promise(r=>setTimeout(r,120))}
-    UI.applyLive();return true},
-  fail(msg){this.state='error';this.err=msg;this.stop(true);UI.applyLive()},
-  async start(){if(this.starting)return;this.stop(true);this.err='';if(!this.key()){this.state='nokey';UI.applyLive();return}
-    this.state='connecting';UI.applyLive();
-    this.starting=true;let ok;try{ok=await this.snapshot()}finally{this.starting=false}if(!ok)return;
-    if(Market.isOpen())this.connect();else{this.state='closed';UI.applyLive()}},
-  connect(){this.manualClose=false;let ws;try{ws=new WebSocket('wss://ws.finnhub.io?token='+encodeURIComponent(this.key()))}catch(e){this.fail('WebSocket blocked: '+e.message);return}
-    this.ws=ws;this.state='connecting';
-    ws.onopen=()=>{this.retry=0;this.subs=this.symbols();for(const s of this.subs)ws.send(JSON.stringify({type:'subscribe',symbol:s}));this.state='live';this.err='';UI.applyLive()};
-    ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data)}catch(e){return}
-      if(m.type==='trade'&&Array.isArray(m.data)){for(const x of m.data){const cur=this.px[x.s];if(cur&&cur.src!=='ledger'&&x.t<cur.t)continue;
-          const prev=cur?cur.p:null;this.px[x.s]={p:x.p,t:x.t,src:'ws',pc:cur?cur.pc:null,via:'Finnhub trade'};this.lastTick=Date.now();if(prev!=null&&x.p!==prev)UI.flash(x.s,x.p>prev?1:-1)}
-        UI.scheduleLive()}
-      else if(m.type==='error'){this.err=m.msg||'Finnhub error';UI.applyLive()}};
-    ws.onerror=()=>{this.err='Stream error';};
-    ws.onclose=ev=>{this.ws=null;if(this.manualClose)return;
-      if(!Market.isOpen()){this.state='closed';UI.applyLive();return}
-      this.state='reconnecting';this.retry=Math.min(this.retry+1,6);const wait=Math.min(60,2**this.retry)*1000;
-      this.err=`Stream closed (${ev.code||'network'}). Retrying in ${wait/1000}s.`+(this.retry>=4?' Polling quotes meanwhile.':'');
-      if(this.retry>=4)this.poll();UI.applyLive();clearTimeout(this.timer);this.timer=setTimeout(()=>{if(this.key()&&Market.isOpen())this.connect()},wait)}},
-  poll(){clearTimeout(this.pollT);this.pollT=setTimeout(async()=>{if(this.state==='reconnecting'){await this.snapshot();this.poll()}},60e3)},
-  resubscribe(){if(!this.ws||this.ws.readyState!==1)return;const want=this.symbols();
-    for(const s of this.subs)if(!want.includes(s))this.ws.send(JSON.stringify({type:'unsubscribe',symbol:s}));
-    for(const s of want)if(!this.subs.includes(s))this.ws.send(JSON.stringify({type:'subscribe',symbol:s}));this.subs=want},
-  stop(manual){this.manualClose=!!manual;clearTimeout(this.timer);clearTimeout(this.pollT);if(this.ws){try{this.ws.close()}catch(e){}}this.ws=null},
-  tick(){/* every 15s: keep labels honest, open/close the stream at the bell */
-    const open=Market.isOpen();if(this.key()&&this.state!=='error'){if(open&&!this.ws&&this.state!=='reconnecting'&&this.state!=='connecting')this.start();
-      if(!open&&this.ws){this.stop(true);this.state='closed'}}UI.applyLive()}
+function activityView(){
+  const mode=state.act||'fills';
+  const seg=`<div class="seg">${[['fills','Fills'],['alerts','Alerts'],['post','Post-mortems']].map(([k,l])=>`<button data-act="${k}" class="${mode===k?'on':''}">${l}</button>`).join('')}</div>`;
+  let body='';
+  if(mode==='fills'){
+    const fl=FILLS.slice().reverse();
+    body=`<div class="group">${fl.map(f=>`<div class="cell static" id="fill-${f.fill_id}"><div class="c1"><b>${esc(f.ticker)} ${esc((f.kind||'').replace('_',' '))}</b><span class="sub2">${dshort(f.filled_at)} · ${esc(BOOKN[f.account]||f.account||'')} · ${esc(f.rec_id||'')}</span><span class="sub2">${esc(f.order_type||'')} · ${esc(f.price_source||'')}</span></div><div class="c3 num">${f.fill_price==null?'':n(f.fill_price)}</div></div>`).join('')||'<div class="empty">No fills yet.</div>'}</div>`;
+  } else if(mode==='alerts'){
+    body=`<div class="group">${(D.alerts||[]).slice(0,40).map(a=>`<div class="cell static"><div class="c1"><b>${esc((a.type||'').replace('_',' '))}</b><span class="sub2">${dshort(a.t)} ET${a.book?' · '+esc(BOOKN[a.book]||a.book):''}</span><span class="sub2">${esc(a.text)}</span></div></div>`).join('')||'<div class="empty">No alerts.</div>'}</div>`;
+  } else {
+    body=`<div class="group">${(D.postmortems||[]).map(p=>`<div class="cell static"><div class="c1"><b>${esc(p.outcome||'')}</b><span class="sub2">${esc(p.why||p.one_liner||'')}</span><span class="sub2 num">${p.trade_id||''} ${p.r_multiple!=null?n(p.r_multiple,2)+'R':''}</span></div></div>`).join('')||'<div class="empty">None yet. Written when a trade closes.</div>'}</div>`;
+  }
+  return `<section data-screen="activity">${seg}${body}<p class="fine">fills.jsonl is append-only. Every fill cites its recommendation and the bar used.</p></section>`;
+}
+
+function insightsView(){
+  const mode=state.ins||'perf';
+  const seg=`<div class="seg wrapseg">${[['perf','Performance'],['learn','Learning'],['scan','Scan'],['recs','Record'],['gloss','Glossary']].map(([k,l])=>`<button data-ins="${k}" class="${mode===k?'on':''}">${l}</button>`).join('')}</div>`;
+  if(mode==='perf') return seg+perfPanel();
+  if(mode==='learn') return seg+learnPanel();
+  if(mode==='scan') return seg+scanPanel();
+  if(mode==='recs') return seg+recsPanel();
+  return seg+glossPanel();
+}
+function perfPanel(){
+  const b=state.acct||'main', a=ACC[b]||{}, be=bookEq(b);
+  const key=b==='main'?'equity':b+'_equity', H=D.equity_history||[], spy0=(D.accounts||{}).spy_inception_close;
+  const rows=H.filter(h=>h[key]!=null);
+  const eq=rows.map(h=>h[key]), spy=rows.map(h=>h.spy&&spy0?h.spy/spy0*(a.start_cash||100000):null);
+  const tiles=[['Value',usd(be.eq,2)],['Cash',usd(a.cash,2)],['vs S&P 500',a.vs_spy_pct==null?'n/a':pct(a.vs_spy_pct)],['Realized',susd(a.realized,2)],['Unrealized',susd((a.unrealized||0)+be.d,2)],['Win rate',a.win_rate==null?'n/a':n(a.win_rate,0)+'%'],['Expectancy',a.expectancy_R==null?'n/a':n(a.expectancy_R,2)+'R'],['Max drawdown',a.max_drawdown_pct==null?'n/a':n(a.max_drawdown_pct,2)+'%'],['T1 hit',a.t1_hit_rate==null?'n/a':n(a.t1_hit_rate,0)+'%'],['Cancelled',String(a.cancelled||0)]];
+  return `<section><div class="seg">${['main','shadow','mambo'].map(x=>`<button data-acct="${x}" class="${x===b?'on':''}">${BOOKN[x]}</button>`).join('')}</div>
+    <div class="card">${lineChart([eq,spy],[dshort((rows[0]||{}).t), dshort((rows[rows.length-1]||{}).t)])||'<div class="empty">Curve starts with the first marks.</div>'}<p class="fine">Solid line is the paper account. Dashed is the S&amp;P 500 from the same start.</p></div>
+    <div class="stats">${tiles.map(([k,v])=>`<div class="stat"><span>${k}</span><b class="num">${v}</b></div>`).join('')}</div>
+    <p class="fine" id="slip-note">Unrealized P&amp;L uses the exit value (last price minus 0.2% paper slippage). Prices elsewhere are the last trade.</p>
+  </section>`;
+}
+function learnPanel(){
+  const rv=D.review||{}, gates=rv.gates||[], ds=rv.risk_state||{};
+  const vers=(D.versions||[]).map(v=>`<div class="cell static"><div class="c1"><b>v${esc(v.version)}</b><span class="sub2">${dshort(v.date)} · ${esc(v.status||'')}</span><span class="sub2">${esc((v.changes||[]).join(' '))}</span></div></div>`).join('');
+  const ch=(D.challengers||[]).filter(c=>c.status!=='retired').map(c=>{const g=gates.find(x=>x.challenger===c.id)||{};
+    return `<div class="cell static"><div class="c1"><b>${esc(c.id)}</b><span class="sub2">${esc(c.hypothesis||'')}</span><span class="sub2">${esc(c.status)} · ${g.n_closed??0} closed · avg ${g.avg_R==null?'n/a':n(g.avg_R,2)+'R'} · ${esc(g.verdict||'')}</span></div></div>`}).join('');
+  return `<section>
+    <div class="stats"><div class="stat"><span>Version</span><b>v${esc((D.method||{}).version||'')}</b></div><div class="stat"><span>Risk mode</span><b>${esc((D.method||{}).risk_mode||'')}</b></div><div class="stat"><span>Drawdown</span><b class="num">${n(ds.main_drawdown_pct,1)}%</b></div><div class="stat"><span>Loss streak</span><b class="num">${ds.main_loss_streak??0}</b></div></div>
+    <h2 class="group-h">Versions</h2><div class="group">${vers||'<div class="empty">None.</div>'}</div>
+    <h2 class="group-h">Challengers</h2><div class="group">${ch||'<div class="empty">None active.</div>'}</div>
+    <h2 class="group-h">Rules</h2><div class="group">${(rv.rules||[]).map(x=>`<div class="cell static"><div class="c1"><span class="sub2">${esc(x)}</span></div></div>`).join('')}</div>
+    ${(D.changelog)?`<h2 class="group-h">Changelog</h2><pre class="log">${esc(D.changelog)}</pre>`:''}
+  </section>`;
+}
+function scanPanel(){
+  const S=D.scan||{}; if(!S.funnel) return '<section><div class="empty">No scan yet.</div></section>';
+  const g=S.regime||{}, F=S.funnel, SC=S.setup_counts||{};
+  const cands=(S.candidates||[]).slice(0,25).map((c,i)=>`<div class="cell static"><div class="c1"><b>${i+1} ${esc(c.ticker)}</b><span class="sub2">${esc(SETUPN[c.setup]||c.setup)} · score ${n(c.score,0)} · RS ${c.rs_rating} · ${c.order_kind==='buy_stop'?'stop':'limit'} ${n(c.entry)} · R:R ${rrTxt(c.rr)}</span><span class="sub2">${c.booked?BOOKN[c.booked]+' · ':''}${(c.flags||[]).join(', ')||'unflagged'}</span></div></div>`).join('');
+  return `<section><p class="fine">Scan of the ${dshort(S.bar_date)} close. Universe ${n(F.universe,0)} → liquid ${n(F.liquid,0)} → setups ${n(F.uptrend_or_setup,0)} → Main ${S.n_main}, Shadow ${S.n_shadow}. SPY ${n(g.spy_close)} vs 200-day ${n(g.spy_sma200)} (${esc(g.state||'')}).</p>
+    <div class="group">${Object.entries(SC).map(([k,v])=>`<div class="cell static"><div class="c1"><b>${esc(SETUPN[k]||k)}</b></div><div class="c3 num">${v}</div></div>`).join('')}</div>
+    <h2 class="group-h">Top candidates</h2><div class="group">${cands}</div></section>`;
+}
+function recsPanel(){
+  const rows=RECS.slice().reverse().map(r=>`<div class="cell static"><div class="c1"><b>${esc(r.rec_id)} ${esc(r.ticker)}</b><span class="sub2">${dshort(r.issued_at)} · ${esc(BOOKN[r.account]||r.account)} · v${esc(r.method_version||'')}</span><span class="sub2">${esc(r.paper_outcome||'')}</span></div></div>`).join('');
+  return `<section><p class="fine">recs.jsonl is append-only and hash-chained. Revisions are new records.</p><div class="group">${rows||'<div class="empty">No recommendations.</div>'}</div></section>`;
+}
+function glossPanel(){
+  return `<section><div class="group">${Object.entries(D.glossary||{}).map(([k,v])=>`<div class="cell static"><div class="c1"><b>${esc(k)}</b><span class="sub2">${esc(v)}</span></div></div>`).join('')}</div></section>`;
+}
+
+function settingsView(){
+  const th=localStorage.getItem('sd.theme')||'system';
+  const d=Live.diag();
+  const hm=ms=>ms?etParts(ms).hms:'never';
+  return `<section data-screen="settings">
+    <h2 class="group-h">Appearance</h2>
+    <div class="seg" id="theme-seg">${[['system','System'],['light','Light'],['dark','Dark']].map(([k,l])=>`<button data-theme-set="${k}" class="${th===k?'on':''}">${l}</button>`).join('')}</div>
+    <h2 class="group-h">Live prices</h2>
+    <div class="group padg" id="key-block">
+      <p id="key-state" class="sub2"></p>
+      <p class="fine">Prices stream from <a href="https://finnhub.io/register">Finnhub</a> to this device only. The key stays in this app's storage and is never uploaded. Free plan: 50 symbols, one stream, 60 quotes a minute. On iPhone, the installed app keeps its own storage, so paste the key again after Add to Home Screen.</p>
+      <ol class="fine"><li>Create a free account at <a href="https://finnhub.io/register">finnhub.io/register</a>.</li><li>Copy the key from <a href="https://finnhub.io/dashboard">finnhub.io/dashboard</a>.</li><li>Paste it here, then Test and Save.</li></ol>
+      <label class="lbl" for="key-in">Finnhub API key</label>
+      <div class="keyrow"><input id="key-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste key"><button type="button" id="key-show" class="btn">Show</button></div>
+      <div class="keyrow"><button type="button" id="key-test-btn" class="btn">Test connection</button><button type="button" id="key-save" class="btn primary">Save and connect</button></div>
+      <button type="button" id="key-remove" class="btn danger">Remove key</button>
+      <p id="key-test" class="fine" role="status"></p>
+    </div>
+    <h2 class="group-h">Diagnostics</h2>
+    <div class="group" id="diag">
+      ${[['Feed',d.state],['Socket',d.socket],['Symbols',d.symbols+' (subscribed '+d.subs+')'],['Messages',String(d.msgs)],['Last message',hm(d.lastMsg)],['Last trade',hm(d.lastTrade)],['Last quote poll',hm(d.lastPoll)],['Last error',d.err||'none']].map(([k,v])=>`<div class="cell static"><div class="c1">${k}</div><div class="c3 num">${esc(v)}</div></div>`).join('')}
+    </div>
+    <h2 class="group-h">App</h2>
+    <div class="group padg">
+      <p id="install-state" class="fine"></p>
+      <button type="button" class="btn" data-install>Install app</button>
+      <button type="button" class="btn" id="sw-check">Check for update</button>
+      <p class="fine" id="app-ver">Version ${esc(APP_VERSION)}. Paper trading only, not financial advice. Live prices are informational. Official paper fills are booked by the scheduled checks on 5-minute bars.</p>
+    </div>
+  </section>`;
+}
+
+function screen(){
+  const tab=state.tab||'home';
+  if(tab==='home') return homeView();
+  if(tab==='positions') return positionsView();
+  if(tab==='activity') return activityView();
+  if(tab==='insights') return insightsView();
+  return settingsView();
+}
+const TITLES={home:'Swing Desk',positions:'Positions',activity:'Activity',insights:'Insights',settings:'Settings'};
+
+/* One price store. Every surface reads Prices.get(symbol). Nothing else may
+   read data.json quotes or invent a price. src is trade | quote | ledger. */
+const SLIP = 0.002; /* paper exit haircut, same as the ledger. Never shown as the price. */
+const Prices = {
+  map: {},
+  put(sym, rec){
+    if(!sym || rec.p==null || isNaN(rec.p)) return;
+    const t = rec.t>1e12 ? rec.t : (rec.t||0)*1000;
+    const cur = this.map[sym];
+    /* ledger as_of is when the file was written, not when the trade printed, so a quote always replaces it */
+    if(cur && rec.src==='ledger' && cur.src!=='ledger') return;
+    if(cur && cur.src!=='ledger' && rec.src!=='ledger' && t && cur.t && t<cur.t) return;
+    this.map[sym] = {p:+rec.p, t:t||Date.now(), src:rec.src, via:rec.via||rec.src, pc:rec.pc!=null?+rec.pc:(cur?cur.pc:null)};
+  },
+  get(sym){ return this.map[sym]||null },
+  seed(d){
+    const q=(d&&d.quotes)||{};
+    for(const [s,v] of Object.entries(q)){
+      if(v&&v.price!=null) this.put(s,{p:v.price, t:parseET(v.as_of)||0, src:'ledger', via:v.source||'ledger', pc:v.prev_close});
+    }
+  }
+};
+const Val = {
+  last(tk){ const q=Prices.get(tk); return q?q.p:null },
+  /* exit value used ONLY for P&L / equity, labeled once in the UI */
+  exit(tk){ const p=this.last(tk); return p==null?null:p*(1-SLIP) },
+  live(tk){ const q=Prices.get(tk); return !!(q&&q.src!=='ledger') },
+  deltaPos(p){ if(!this.live(p.ticker)||p.last_value==null) return 0; return (+p.qty||0)*(this.exit(p.ticker)-p.last_value) }
+};
+const Live = {
+  px: Prices.map,
+  state:'nokey', err:'', ws:null, subs:[], retry:0, manualClose:false, timer:null, pollI:null,
+  msgs:0, lastMsg:0, lastPoll:0, lastTrade:0, starting:false,
+  key(){ try{return localStorage.getItem('sd.finnhub.key')||''}catch(e){return ''} },
+  setKey(k){ if(k) localStorage.setItem('sd.finnhub.key',k); else localStorage.removeItem('sd.finnhub.key') },
+  symbols(){
+    const s=new Set(['SPY']);
+    for(const t of (T||[])) if(t.status==='OPEN'||t.status==='PENDING') s.add(t.ticker);
+    return [...s].slice(0,50);
+  },
+  quote(tk){ return Prices.get(tk) },
+  refClose(tk){ const q=Prices.get(tk); return q&&q.pc?q.pc:null },
+  seed(){ Prices.seed(D) },
+  badge(tk){
+    const q=Prices.get(tk), st=Market.status();
+    if(!q) return {c:'none', short:'n/a', title:'No price'};
+    const hm=etParts(q.t).hms, age=Date.now()-q.t;
+    const when = q.src==='ledger' ? 'Ledger '+etParts(q.t).hm : 'Last trade '+hm;
+    if(q.src==='ledger'){
+      if(!st.open) return {c:'closed', short: st.phase==='after'||st.phase==='pre' ? 'Closed' : 'Last close', title: when+' ET · '+q.via};
+      return {c:'delayed', short:'Delayed '+fmtAge(age).split(' ')[0], title: when+' ET · '+q.via};
+    }
+    if(st.phase==='after'||st.phase==='pre') return {c:'closed', short:'After hours', title: when+' ET · '+q.via};
+    if(!st.open) return {c:'closed', short:'Closed', title: when+' ET · '+q.via};
+    if(q.src==='trade' && age<120000) return {c:'live', short:'LIVE '+hm, title:'Streaming trade '+hm+' ET · '+q.via};
+    if(age<90000) return {c:'fresh', short:'Quote '+hm, title:'REST quote '+hm+' ET · '+q.via};
+    return {c:'delayed', short:'Delayed '+fmtAge(age).split(' ')[0], title: when+' ET · '+q.via};
+  },
+  async rest(sym){
+    const r = await fetch('https://finnhub.io/api/v1/quote?symbol='+encodeURIComponent(sym)+'&token='+encodeURIComponent(this.key()));
+    if(r.status===401||r.status===403) throw Object.assign(new Error('Finnhub rejected the key ('+r.status+')'),{auth:true});
+    if(r.status===429) throw Object.assign(new Error('Finnhub rate limit'),{rate:true});
+    const j = await r.json();
+    if(j.error) throw Object.assign(new Error(j.error),{auth:/key/i.test(j.error)});
+    if(j.c){ Prices.put(sym,{p:j.c, t:(j.t||0)*1000, src:'quote', via:'Finnhub quote', pc:j.pc}); this.lastPoll=Date.now(); }
+    return j;
+  },
+  async test(k){
+    const r = await fetch('https://finnhub.io/api/v1/quote?symbol=SPY&token='+encodeURIComponent(k));
+    if(r.status===401||r.status===403) return {ok:false, err:'Finnhub rejected the key ('+r.status+')'};
+    const j = await r.json().catch(()=>({}));
+    if(j.error) return {ok:false, err:j.error};
+    if(!j.c) return {ok:false, err:'No quote returned'};
+    return {ok:true, px:j.c};
+  },
+  fail(msg){ this.state='error'; this.err=msg; this.lastErr=msg; this.stop(true); UI.applyLive() },
+  armPoll(){
+    clearInterval(this.pollI); let i=0;
+    this.pollI = setInterval(async()=>{
+      if(!this.key()||this.state==='error'||document.hidden) return;
+      const s=this.symbols(); if(!s.length) return;
+      const tk=s[i++%s.length];
+      const q=Prices.get(tk);
+      if(q&&q.src==='trade'&&Date.now()-q.t<20000){ this.lastPoll=Date.now(); return }
+      try{ await this.rest(tk); this.lastErr='' }
+      catch(e){ if(e.auth){ this.fail(e.message); return } this.lastErr=e.message||'quote failed' }
+      UI.applyLive();
+    }, 1200);
+  },
+  wantsStream(){ const p=Market.status().phase; return p==='open'||p==='pre'||p==='after' },
+  async start(){
+    if(this.starting) return;
+    this.err=''; this.lastErr='';
+    if(!this.key()){ this.state='nokey'; this.stop(true); UI.applyLive(); return }
+    this.starting=true;
+    try{
+      this.state='connecting'; UI.applyLive();
+      try{ await this.rest('SPY') }catch(e){ if(e.auth){ this.fail(e.message); return } this.lastErr=e.message||'' }
+      this.armPoll();
+      if(this.wantsStream()) this.connect();
+      else { this.stopSocket(); this.state='polling'; UI.applyLive() }
+    } finally { this.starting=false }
+  },
+  connect(){
+    if(!this.key()) return;
+    this.manualClose=false;
+    if(this.ws && this.ws.readyState<=1) return;
+    let ws; try{ ws=new WebSocket('wss://ws.finnhub.io?token='+encodeURIComponent(this.key())) }
+    catch(e){ this.lastErr='WebSocket blocked'; this.state='polling'; UI.applyLive(); return }
+    this.ws=ws; this.state='connecting';
+    ws.onopen=()=>{ this.retry=0; this.subs=this.symbols();
+      for(const s of this.subs) ws.send(JSON.stringify({type:'subscribe',symbol:s}));
+      this.state='live'; this.err=''; UI.applyLive() };
+    ws.onmessage=ev=>{
+      this.msgs++; this.lastMsg=Date.now();
+      let m; try{ m=JSON.parse(ev.data) }catch(e){ return }
+      if(m.type==='ping'){ try{ ws.send(JSON.stringify({type:'pong'})) }catch(e){} return }
+      if(m.type==='trade'&&Array.isArray(m.data)){
+        for(const x of m.data){
+          const cur=Prices.get(x.s), prev=cur?cur.p:null;
+          Prices.put(x.s,{p:x.p, t:x.t, src:'trade', via:'Finnhub trade', pc:cur?cur.pc:null});
+          this.lastTrade=Date.now();
+          if(prev!=null&&x.p!==prev) UI.flash(x.s, x.p>prev?1:-1);
+        }
+        UI.scheduleLive();
+      }
+    };
+    ws.onerror=()=>{ this.lastErr='Stream error' };
+    ws.onclose=ev=>{
+      this.ws=null; if(this.manualClose) return;
+      if(!this.wantsStream()){ this.state='polling'; UI.applyLive(); return }
+      this.state='reconnecting'; this.retry=Math.min(this.retry+1,6);
+      const wait=Math.min(60,2**this.retry)*1000;
+      this.lastErr='Stream closed ('+(ev.code||'network')+'). Retrying.';
+      UI.applyLive(); clearTimeout(this.timer);
+      this.timer=setTimeout(()=>{ if(this.key()&&this.wantsStream()) this.connect() }, wait);
+    };
+  },
+  resubscribe(){
+    if(!this.ws||this.ws.readyState!==1) return;
+    const want=this.symbols();
+    for(const s of this.subs) if(!want.includes(s)) this.ws.send(JSON.stringify({type:'unsubscribe',symbol:s}));
+    for(const s of want) if(!this.subs.includes(s)) this.ws.send(JSON.stringify({type:'subscribe',symbol:s}));
+    this.subs=want;
+  },
+  stopSocket(){ this.manualClose=true; clearTimeout(this.timer); if(this.ws){ try{this.ws.close()}catch(e){} } this.ws=null },
+  stop(manual){ this.stopSocket(); if(manual) clearInterval(this.pollI) },
+  wake(){ /* iOS kills sockets in the background and does not always fire onclose */
+    if(!this.key()||this.state==='error') return;
+    if(!this.pollI) this.armPoll();
+    if(this.wantsStream() && (!this.ws || this.ws.readyState!==1)){ this.stopSocket(); this.connect() }
+    UI.applyLive();
+  },
+  tick(){
+    const want=this.wantsStream();
+    if(this.key()&&this.state!=='error'){
+      if(want && (!this.ws||this.ws.readyState>1) && this.state!=='connecting' && this.state!=='reconnecting') this.connect();
+      if(!want && this.ws){ this.stopSocket(); this.state='polling' }
+      if(!this.pollI) this.armPoll();
+    }
+    UI.applyLive();
+  },
+  diag(){
+    const rs=this.ws?['connecting','open','closing','closed'][this.ws.readyState]:'none';
+    return {state:this.state, socket:rs, subs:this.subs.length, symbols:this.symbols().length,
+      lastMsg:this.lastMsg, msgs:this.msgs, lastPoll:this.lastPoll, lastTrade:this.lastTrade, err:this.lastErr||this.err||''};
+  }
 };
 
-/* ---------- live UI: ticker strip, badges, live P&L, crossings ---------- */
-const UI={
-  pending:false,
-  scheduleLive(){if(this.pending)return;this.pending=true;setTimeout(()=>{this.pending=false;this.applyLive()},STATIC?0:250)},
-  flash(tk,dir){if(STATIC)return;for(const el of $$(`[data-px="${tk}"]`)){el.classList.remove('up','down');void el.offsetWidth;el.classList.add(dir>0?'up':'down')}},
-  badgeHTML(tk,long){const b=Live.badge(tk);return `<span class="lb ${b.c}" title="${esc(b.long)}"><i></i>${esc(long?b.long:b.short)}</span>`},
-  feedStatus(){const k=Live.key(),mk=Market.status();
-    if(!k){const ts=Object.values((D&&D.quotes)||{}).map(q=>parseET(q.as_of)||0),mx=ts.length?Math.max(...ts):0;
-      return{c:'off',t:'No live feed',d:`Prices are the ledger's last recorded prices${mx?` (newest ${dshort(etParts(mx).date)} ${etParts(mx).hm} ET)`:''}, not live. Add a free Finnhub key in Settings to stream live prices on this device.`}}
-    if(Live.state==='error')return{c:'err',t:'Live feed error',d:Live.err.replace(/\.?$/,'.')+' Showing ledger prices. Check the key in Settings.'};
-    if(!mk.open)return{c:'closed',t:Market.label(),d:'Prices are the last close. The live stream resumes at the open.'};
-    if(Live.state==='live')return{c:'live',t:'LIVE · Finnhub',d:Live.lastTick?`Last tick ${etParts(Live.lastTick).hms} ET`:'Connected, waiting for trades'};
-    if(Live.state==='reconnecting')return{c:'warn',t:'Reconnecting',d:Live.err};
-    return{c:'warn',t:'Connecting',d:'Opening the Finnhub stream'}},
-  strip(){const el=$('#ticker');if(!el||!D)return;const fs=this.feedStatus();
-    const chips=Live.symbols().map(tk=>{const q=Live.quote(tk),rc=Live.refClose(tk),ch=q&&rc?(q.p/rc-1)*100:null,b=Live.badge(tk);
-      const t=T.find(x=>x.ticker===tk&&(x.status==='OPEN'||x.status==='PENDING'));
-      return `<a class="tq" ${t?`href="#tc-${t.id}"`:''} data-tk="${tk}"><b>${tk}</b><span class="p num" data-px="${tk}">${q?n(q.p):'n/a'}</span><span class="c num ${cls(ch)}">${ch==null?'':pct(ch,1)}</span><span class="lb ${b.c}" title="${esc(b.long)}"><i></i>${esc(b.short)}</span></a>`}).join('');
-    el.innerHTML=`<button class="tq feed ${fs.c}" data-open="settings" title="${esc(fs.d)}"><span class="lb ${fs.c==='live'?'live':fs.c==='closed'?'closed':fs.c==='off'?'none':'delayed'}"><i></i>${esc(fs.t)}</span></button>${chips}`;
-    const n0=$('#feed-note');if(n0){n0.className='feed-note '+fs.c;n0.innerHTML=`<b>${esc(fs.t)}.</b> ${esc(fs.d)} ${!Live.key()||Live.state==='error'?'<button class="lnk" data-open="settings">Settings</button>':''}`}},
-  /* the ledger values a position at its exit value (last price less the paper sell slippage): apply the same ratio to live prices */
-  markF(tk){for(const b of ['main','shadow','mambo'])for(const p of (ACC[b]||{}).positions||[])if(p.ticker===tk&&p.spot>0&&p.last_value>0)return p.last_value/p.spot;return 1},
-  livePos(b){/* live delta vs the ledger mark, per account */let d=0,any=false;const a=ACC[b]||{};
-    for(const p of a.positions||[]){const q=Live.quote(p.ticker);if(!q||q.src==='ledger'||p.last_value==null)continue;const qty=+p.qty||0;d+=qty*(q.p*this.markF(p.ticker)-p.last_value);any=true}
-    return{d,any}},
-  applyLive(){if(!D)return;this.strip();
-    const now=Date.now();
-    /* cards */
-    for(const row of $$('.liverow')){const t=T.find(x=>x.id===row.dataset.trade);if(!t)continue;const q=Live.quote(t.ticker);
-      const lv=(t.reasoning||{}).levels||{},o=t.entry_order||{},stop=t.stop_moved||lv.stop;
-      if(!q){row.innerHTML='';continue}
-      const d=v=>v==null?'n/a':pct((v/q.p-1)*100,1),items=[];
-      if(t.status==='PENDING'){const trig=o.kind==='limit_zone'?o.zone[1]:o.trigger;if(trig!=null)items.push([o.kind==='limit_zone'?'to zone':'to trigger',d(trig)])}
-      items.push(['to stop',d(stop)]);if(!t.t1_hit)items.push(['to T1',d(lv.t1)]);items.push(['to T2',d(lv.t2)]);
-      row.innerHTML=`<div class="lr-p"><span class="num big2" data-px="${t.ticker}">${n(q.p)}</span>${this.badgeHTML(t.ticker,true)}</div><div class="lr-d num">${items.map(([k,v])=>`<span><i>${k}</i> ${v}</span>`).join('')}</div>`;
-      const cur=$(`.cur[data-trade="${t.id}"]`);if(cur){const s=+cur.dataset.stop,t2=+cur.dataset.t2,p=Math.max(0,Math.min(100,(q.p-s)/(t2-s)*100));cur.style.left=p+'%';cur.dataset.left=p;const sp=$('span',cur);if(sp)sp.textContent=n(q.p)}
-      if(t.status==='OPEN'){const el=$(`[data-pnl="${t.id}"]`);if(el&&q.src!=='ledger'){const qty=t.contracts_open??t.contracts,ent=entryRef(t),pl=(t.realized_partial||0)+(t.direction==='short'?-1:1)*qty*(q.p*this.markF(t.ticker)-ent);
-          el.innerHTML=`${susd(pl)} <span class="dim" style="font-size:11px">${Market.isOpen()?'live est.':'est. at last close'}</span>`;el.className='v num '+cls(pl)}}}
-    /* hero + minis + account tiles */
-    const hl=$('#hero-live');
-    for(const b of ['main','shadow','mambo']){const k=D.books[b],{d,any}=this.livePos(b);if(!k)continue;const eq=k.equity+d;
-      const me=$('#mini-eq-'+b);if(me)me.textContent=usd(eq);const mp=$('#mini-pct-'+b);if(mp&&any){mp.textContent=pct((eq/k.start-1)*100)+(Market.isOpen()?' live':' est.');mp.className='num '+cls(eq-k.start)}
-      if(b==='main'){const he=$('#hero-eq');if(he&&any){const w=Math.floor(eq);he.innerHTML=`<span>$${n(w,0)}</span><span class="cents">${(eq-w).toFixed(2).slice(1)}</span>`}
-        if(hl)hl.innerHTML=any?`${Market.isOpen()?'<span class="lb live"><i></i>Live estimate</span>':'<span class="lb closed"><i></i>Estimate at last close</span>'} ${susd(d,2)} vs the ledger mark of ${usd(k.equity,2)}. The official equity updates at the next check.`:
-          `<span class="lb ${Market.isOpen()?'delayed':'closed'}"><i></i>Ledger value</span> marked ${esc(String(D.as_of||D.generated_at||'').slice(0,16))} ET`}
-      if(b===state.acct){const a=ACC[b]||{};const ae=$('#acct-eq');if(ae&&any){ae.textContent=usd((a.equity||0)+d,2);$('#acct-eq-s').textContent=Market.isOpen()?'live estimate':'estimate at last close';
-          $('#acct-mv').textContent=usd((a.market_value||0)+d,2);const ur=$('#acct-ur');ur.textContent=susd((a.unrealized||0)+d,2);$('#acct-ur-s').textContent=Market.isOpen()?'live estimate':'estimate at last close'}
-        for(const p of a.positions||[]){const q=Live.quote(p.ticker);if(!q||q.src==='ledger')continue;const qty=+p.qty||0,dd=qty*(q.p*this.markF(p.ticker)-p.last_value);
-          const L=$(`[data-pos-last="${p.trade_id}"]`);if(L)L.innerHTML=`<span data-px="${p.ticker}">${n(q.p)}</span><div>${this.badgeHTML(p.ticker)}</div>`;
-          const M=$(`[data-pos-mv="${p.trade_id}"]`);if(M)M.textContent=usd(p.market_value+dd);
-          const P=$(`[data-pos-pl="${p.trade_id}"]`);if(P){P.textContent=susd(p.unrealized+dd);P.className='num '+cls(p.unrealized+dd)}}}}
-    /* hero list rows: live price */
-    for(const r of $$('[data-tk-row]')){const tk=r.dataset.tkRow,q=Live.quote(tk);let s=$('.rowpx',r);if(!q)continue;if(!s){s=document.createElement('div');s.className='rowpx num';$('.what',r).appendChild(s)}
-      s.innerHTML=`<span data-px="${tk}">${n(q.p)}</span> ${this.badgeHTML(tk)}`}
-    this.crossings();this.stamp()},
-  /* live crossing banners: informational only */
-  crossings(){const box=$('#banners');if(!box)return;const day=etParts().date;let seen={};try{seen=JSON.parse(sessionStorage.getItem('sd.x.'+day)||'{}')}catch(e){}
+const UI = {
+  t:null,
+  scheduleLive(){ clearTimeout(this.t); this.t=setTimeout(()=>this.applyLive(),80) },
+  flash(tk,dir){ $$(`[data-px="${tk}"]`).forEach(el=>{ el.classList.remove('up','down'); void el.offsetWidth; el.classList.add(dir>0?'up':'down') }) },
+  feedStatus(){
+    const k=Live.key(), st=Market.status();
+    if(!k) return {c:'off', t:'No live feed', d:'Prices are the ledger last close. Add a free Finnhub key in Settings to stream on this device.'};
+    if(Live.state==='error') return {c:'err', t:'Live feed error', d:(Live.err||'Finnhub rejected the key.')+' Showing ledger prices.'};
+    if(st.phase==='after'||st.phase==='pre') return {c:'closed', t:'After hours', d:'Latest quote, not the regular-session print. The stream resumes at the next open.'};
+    if(!st.open) return {c:'closed', t:Market.label(), d:'Prices are the last close. Quotes refresh about every 20 seconds.'};
+    if(Live.state==='live') return {c:'live', t:'LIVE', d:'Finnhub trades. Quiet names fall back to a quote.'};
+    if(Live.state==='polling'||Live.state==='reconnecting'||Live.state==='connecting') return {c:'fresh', t:'Quotes', d:Live.lastErr||'Connecting to Finnhub.'};
+    return {c:'off', t:'No live feed', d:''};
+  },
+  strip(){
+    const fs=this.feedStatus();
+    const el=$('#ticker'); if(!el)return;
+    const chips=Live.symbols().map(tk=>{
+      const q=Prices.get(tk), rc=Live.refClose(tk), ch=q&&rc?(q.p/rc-1)*100:null, b=Live.badge(tk);
+      return `<button class="tq" data-jump="${esc(tk)}"><b>${esc(tk)}</b> <span class="num" data-px="${esc(tk)}">${q?n(q.p):''}</span> ${ch==null?'':`<span class="num ${cls(ch)}">${pct(ch,1)}</span>`} <span class="lb ${b.c}" title="${esc(b.title)}"><i></i>${esc(b.short)}</span></button>`;
+    }).join('');
+    el.innerHTML=`<button class="tq feed ${fs.c}" data-tab="settings"><i class="dot"></i>${esc(fs.t)}</button>`+chips;
+    const n0=$('#feed-note');
+    if(n0){ const show=fs.c==='off'||fs.c==='err'; n0.hidden=!show; n0.className='feed-note '+fs.c; n0.innerHTML=show?`<b>${esc(fs.t)}.</b> ${esc(fs.d)} <button class="lnk" data-tab="settings">Settings</button>`:'' }
+    const m=$('#mkt'); if(m){ m.textContent=Market.label(); m.classList.toggle('live',Market.isOpen()) }
+  },
+  applyLive(){
+    if(!D)return;
+    this.strip();
+    $$('[data-px]').forEach(el=>{ const q=Prices.get(el.dataset.px); if(q){ el.textContent=n(q.p); el.dataset.src=q.src } });
+    $$('[data-pl]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.pl); if(!t)return; const p=shownPnl(t); el.textContent=p==null?'':susd(p,0); el.className='c3 num '+cls(p) });
+    $$('[data-slim]').forEach(el=>{ const cur=Val.last(el.closest('[data-trade]')? (T.find(x=>x.id===el.dataset.slim)||{}).ticker : ''); 
+      const t=T.find(x=>x.id===el.dataset.slim); if(!t)return; const px=Val.last(t.ticker); if(px==null)return;
+      const s=+el.dataset.stop,t2=+el.dataset.t2; const p=Math.max(0,Math.min(100,(px-s)/(t2-s)*100)); const i=$('i',el); if(i)i.style.width=p+'%' });
+    $$('[data-chart-px]').forEach(c=>{ const px=Val.last(c.dataset.chartPx); const wrap=c.closest('.chart-wrap'); if(px==null||!wrap)return;
+      const lo=+wrap.dataset.lo,hi=+wrap.dataset.hi,pt=+wrap.dataset.pt,pb=+wrap.dataset.pb,H=+wrap.dataset.h;
+      const y=pt+(hi-px)/(hi-lo)*(H-pt-pb); c.setAttribute('cy',y); const line=c.previousElementSibling; if(line){line.setAttribute('y1',y);line.setAttribute('y2',y)} });
+    for(const b of ['main','shadow','mambo']){
+      const be=bookEq(b), he=$('#hero-eq');
+      if(he && he.dataset.eq===b) he.textContent=usd(be.eq,2);
+    }
+    const hl=$('#hero-live'), b=state.acct||'main', be=bookEq(b), ch=dayChange(b);
+    const hd=$('#hero-day');
+    if(hd) hd.innerHTML=`${ch.d==null?'':susd(ch.d,2)} ${ch.pct==null?'':pct(ch.pct)} <span class="sub2">${ch.label}${ch.spy==null?'':` · S&P 500 ${pct(ch.spy)}`}</span>`;
+    if(hl) hl.textContent = be.any ? (Market.isOpen()?'Live estimate ':'Estimate ')+susd(be.d,2)+' vs the ledger mark of '+usd(be.base,2)+'. The official equity updates at the next check.' : 'Ledger value marked '+String(D.as_of||D.generated_at||'').slice(0,16)+' ET';
+    this.crossings(); this.stamp(); this.diag();
+  },
+  crossings(){
+    const box=$('#banners'); if(!box||!Market.isOpen()){ if(box&&!Market.isOpen())box.innerHTML=''; return }
+    const day=etParts().date, seen=JSON.parse(sessionStorage.getItem('sd.x')||'{}');
     const out=[];
-    for(const t of T){if(t.status!=='OPEN'&&t.status!=='PENDING')continue;const q=Live.quote(t.ticker);if(!q||q.src==='ledger'||!Market.isOpen()||Date.now()-q.t>5*6e4)continue;
-      const lv=(t.reasoning||{}).levels||{},o=t.entry_order||{},stop=t.stop_moved||lv.stop,x=[];
-      if(t.status==='PENDING'){if(o.kind==='buy_stop'&&q.p>=o.trigger)x.push(['trig',`traded through its buy-stop ${n(o.trigger)}`,'pos']);
-        if(o.kind==='limit_zone'&&q.p<=o.zone[1])x.push(['zone',`is inside its buy zone ${n(o.zone[0])}-${n(o.zone[1])}`,'pos']);
-        if(stop!=null&&q.p<=stop)x.push(['pstop',`traded at or below its stop ${n(stop)} before filling (the order will be cancelled)`,'neg'])}
-      else{if(stop!=null&&q.p<=stop)x.push(['stop',`crossed its stop ${n(stop)}`,'neg']);if(!t.t1_hit&&lv.t1!=null&&q.p>=lv.t1)x.push(['t1',`crossed T1 ${n(lv.t1)}`,'pos']);
-        if(!t.t2_hit&&lv.t2!=null&&q.p>=lv.t2)x.push(['t2',`crossed T2 ${n(lv.t2)}`,'pos'])}
-      for(const[k,txt,c]of x){const id=t.id+':'+k;if(seen[id]==='x')continue;
-        out.push(`<div class="xb ${c}" data-x="${id}"><div><b>${t.ticker}</b> ${txt} live at ${n(q.p)} (${etParts(q.t).hms} ET, ${BOOKN[t.book]} ${t.id}) - the official ledger books it at the next check, from 5-minute bar data.</div><button class="xclose" aria-label="Dismiss" data-dismiss="${id}">×</button></div>`)}}
-    box.innerHTML=out.slice(0,4).join('')},
-  dismiss(id){const day=etParts().date;let seen={};try{seen=JSON.parse(sessionStorage.getItem('sd.x.'+day)||'{}')}catch(e){}seen[id]='x';try{sessionStorage.setItem('sd.x.'+day,JSON.stringify(seen))}catch(e){}this.crossings()},
-  stamp(){const el=$('#ledger-stamp');if(!el||!D)return;const g=String(D.as_of||D.generated_at||'');el.title='Last ledger mark '+g+'. Data file written '+String(D.generated_at||'')+'.';const age=Date.now()-(parseET(g)||Date.now());
-    el.innerHTML=`<span class="lb ${Live.state==='live'&&Market.isOpen()?'live':Market.isOpen()?'delayed':'closed'}"><i></i></span><span class="txt">Ledger updated ${esc(g.slice(11,16))} ET</span>`;if(age>6e4)el.title+=' ('+fmtAge(age)+' ago)'},
-  toast(msg,action,cb,ms){const t=$('#toast');t.innerHTML=`<span>${msg}</span>${action?`<button class="btn sm">${action}</button>`:''}<button class="xclose" aria-label="Close">×</button>`;t.hidden=false;
-    if(action)$('.btn',t).onclick=cb;$('.xclose',t).onclick=()=>{t.hidden=true};if(ms)setTimeout(()=>{t.hidden=true},ms)}
+    for(const t of T){
+      if(t.status!=='OPEN'&&t.status!=='PENDING') continue;
+      const q=Prices.get(t.ticker); if(!q||q.src==='ledger') continue;
+      const lv=(t.reasoning||{}).levels||{}, o=t.entry_order||{};
+      const hits=[];
+      if(t.status==='PENDING'&&o.kind==='buy_stop'&&q.p>=o.trigger) hits.push(['buy',`${t.ticker} crossed its buy-stop ${n(o.trigger)} live at ${n(q.p)}`]);
+      if(t.status==='PENDING'&&o.kind==='limit_zone'&&q.p<=o.zone[1]) hits.push(['zone',`${t.ticker} is inside its limit zone live at ${n(q.p)}`]);
+      if(t.status==='OPEN'&&lv.stop!=null&&q.p<=lv.stop) hits.push(['stop',`${t.ticker} crossed its stop ${n(lv.stop)} live at ${n(q.p)}`]);
+      if(t.status==='OPEN'&&lv.t1!=null&&q.p>=lv.t1) hits.push(['t1',`${t.ticker} crossed T1 ${n(lv.t1)} live at ${n(q.p)}`]);
+      if(t.status==='OPEN'&&lv.t2!=null&&q.p>=lv.t2) hits.push(['t2',`${t.ticker} crossed T2 ${n(lv.t2)} live at ${n(q.p)}`]);
+      for(const [k,txt] of hits){ const id=t.id+k+day; if(seen[id])continue; out.push(`<div class="xb ${k==='stop'?'bad':'good'}" data-xid="${id}"><span>${esc(txt)} (${etParts(q.t).hms} ET, ${esc(BOOKN[t.book]||'')} ${esc(t.id)}) - the official ledger books it at the next check, from 5-minute bar data.</span><button data-dismiss="${id}" aria-label="Dismiss">×</button></div>`) }
+    }
+    box.innerHTML=out.join('');
+  },
+  stamp(){ const el=$('#ledger-stamp'); if(!el||!D)return; const g=String(D.as_of||D.generated_at||''); el.textContent='Ledger '+g.slice(11,16)+' ET' },
+  diag(){ const box=$('#diag'); if(!box)return; const d=Live.diag(); const hm=ms=>ms?etParts(ms).hms:'never';
+    const rows=[['Feed',d.state],['Socket',d.socket],['Symbols',d.symbols+' (subscribed '+d.subs+')'],['Messages',String(d.msgs)],['Last message',hm(d.lastMsg)],['Last trade',hm(d.lastTrade)],['Last quote poll',hm(d.lastPoll)],['Last error',d.err||'none']];
+    box.innerHTML=rows.map(([k,v])=>`<div class="cell static"><div class="c1">${k}</div><div class="c3 num">${esc(v)}</div></div>`).join('') },
+  toast(msg,action,cb){ const t=$('#toast'); t.innerHTML=`<span>${msg}</span>${action?`<button class="btn sm">${action}</button>`:''}<button class="x" aria-label="Close">×</button>`; t.hidden=false;
+    if(action) $('.btn',t).onclick=cb; $('.x',t).onclick=()=>{t.hidden=true} },
+  haptic(ms){ try{ if(navigator.vibrate) navigator.vibrate(ms||10) }catch(e){} }
 };
-
-/* ---------- chart crosshair (mouse + touch) ---------- */
-function chartPoint(wrap,clientX,clientY){const svg=$('svg',wrap),r=svg.getBoundingClientRect(),W=+wrap.dataset.w,PR=+wrap.dataset.pr,step=+wrap.dataset.step,N=+wrap.dataset.n;
-  const sx=(clientX-r.left)/r.width*W;if(sx<0||sx>W-PR)return null;const i=Math.max(0,Math.min(N-1,Math.floor(sx/step)));
-  const tc=TECH[wrap.dataset.tk];if(!tc)return null;const C=tc.candles.slice(-N),c=C[i];const lo=+wrap.dataset.lo,hi=+wrap.dataset.hi,PT=+wrap.dataset.pt,PB=+wrap.dataset.pb,H=+wrap.dataset.h;
-  const sy=(clientY-r.top)/r.height*H,price=hi-(sy-PT)/(H-PT-PB)*(hi-lo);return{i,c,x:i*step+step/2,sy,price,r,W}}
-function showTip(wrap,ev){const p=chartPoint(wrap,ev.clientX,ev.clientY);const tip=$('.tip',wrap);if(!p){hideTip(wrap);return}
-  wrap.classList.add('xon');const xh=$('.xh',wrap),yh=$('.yh',wrap);xh.setAttribute('x1',p.x);xh.setAttribute('x2',p.x);yh.setAttribute('y1',p.sy);yh.setAttribute('y2',p.sy);
-  const[d,o,h,l,c]=p.c;const ch=(c/o-1)*100;
-  tip.innerHTML=`<b>${dshort(d)}</b> <span class="${cls(ch)}">${pct(ch,1)}</span><br><span class="num">O ${n(o)} H ${n(h)}<br>L ${n(l)} C ${n(c)}</span><br><span class="dim num">cursor ${n(p.price)}</span>`;
-  const px=p.x/p.W*p.r.width;tip.style.left=(px>p.r.width/2?Math.max(0,px-tip.offsetWidth-10):px+10)+'px'}
-function hideTip(wrap){wrap.classList.remove('xon')}
-document.addEventListener('pointermove',e=>{const w=e.target.closest&&e.target.closest('.chart-wrap');if(w)showTip(w,e)},{passive:true});
-document.addEventListener('pointerdown',e=>{const w=e.target.closest&&e.target.closest('.chart-wrap');$$('.chart-wrap.xon').forEach(x=>{if(x!==w)hideTip(x)});if(w)showTip(w,e)},{passive:true});
-document.addEventListener('pointerout',e=>{const w=e.target.closest&&e.target.closest('.chart-wrap');if(w&&e.pointerType==='mouse'&&!w.contains(e.relatedTarget))hideTip(w)},{passive:true});
-
-/* ---------- sheets: settings, more, iOS install ---------- */
-const Sheet={open(id){$$('.sheet').forEach(s=>s.hidden=s.id!=='sheet-'+id);$('#scrim').hidden=false;document.body.classList.add('noscroll');if(id==='settings')Settings.render();const f=$('#sheet-'+id+' [autofocus]');if(f&&innerWidth>700)f.focus()},
-  close(){$$('.sheet').forEach(s=>s.hidden=true);$('#scrim').hidden=true;document.body.classList.remove('noscroll')}};
-const Settings={
-  render(){const k=Live.key(),fs=UI.feedStatus();$('#key-in').value=k;$('#key-state').innerHTML=`<span class="lb ${fs.c==='live'?'live':fs.c==='closed'?'closed':fs.c==='off'?'none':'delayed'}"><i></i>${esc(fs.t)}</span> <span class="mute">${esc(fs.d)}</span>`;
-    $('#key-remove').hidden=!k;$('#app-ver').textContent=APP_VERSION;$('#sym-count').textContent=`${Live.symbols().length} symbols (free plan limit 50)`;Install.renderButtons()},
-  async test(){const k=$('#key-in').value.trim(),out=$('#key-test');if(!k){out.className='test-out err';out.textContent='Paste a key first.';return}
-    out.className='test-out';out.textContent='Testing...';const r=await Live.test(k);out.className='test-out '+(r.ok?'ok':'err');out.textContent=r.msg;return r},
-  async save(){const k=$('#key-in').value.trim();if(!k){Live.setKey('');Live.stop(true);Live.state='nokey';UI.applyLive();this.render();return}
-    const r=await this.test();if(!r||!r.ok)return;Live.setKey(k);Live.state='connecting';await Live.start();this.render()},
-  remove(){Live.setKey('');Live.stop(true);Live.state='nokey';Live.err='';for(const k in Live.px)if(Live.px[k].src!=='ledger')delete Live.px[k];Live.seed();$('#key-in').value='';$('#key-test').textContent='Key removed from this device.';UI.applyLive();this.render()}
+function bindChart(root){
+  $$('.chart-wrap',root||document).forEach(w=>{
+    const tip=$('.tip',w), xh=$('.xh',w), yh=$('.yh',w);
+    const move=ev=>{
+      const r=w.getBoundingClientRect(), svg=w.querySelector('svg'); const pt=svg.createSVGPoint();
+      const src=ev.touches?ev.touches[0]:ev; pt.x=(src.clientX-r.left)/r.width*(+w.dataset.w); pt.y=(src.clientY-r.top)/r.height*(+w.dataset.h);
+      const nC=+w.dataset.n, step=+w.dataset.step, i=Math.max(0,Math.min(nC-1,Math.floor(pt.x/step)));
+      const tc=TECH[w.dataset.tk]; if(!tc)return; const c=tc.candles.slice(-nC)[i]; if(!c)return;
+      xh.setAttribute('x1',(i+.5)*step); xh.setAttribute('x2',(i+.5)*step); yh.setAttribute('y1',pt.y); yh.setAttribute('y2',pt.y);
+      xh.style.opacity=yh.style.opacity=1; tip.hidden=false; tip.style.left=Math.min(r.width-140, Math.max(8,(i+.5)*step/ (+w.dataset.w)*r.width))+'px';
+      tip.textContent=`${dshort(c[0])}  O ${n(c[1])} H ${n(c[2])} L ${n(c[3])} C ${n(c[4])}`;
+    };
+    w.addEventListener('pointermove',move); w.addEventListener('pointerdown',move);
+    w.addEventListener('pointerleave',()=>{xh.style.opacity=yh.style.opacity=0;tip.hidden=true});
+  });
+}
+const Sheet={
+  open(html){ const s=$('#sheet'), sc=$('#scrim'); s.innerHTML=html; s.hidden=false; sc.hidden=false; requestAnimationFrame(()=>s.classList.add('on')); UI.haptic(12); bindChart(s);
+    const body=$('#sheet-body',s)||s; let y0=null, dy=0;
+    s.querySelector('.grab').onpointerdown=e=>{ y0=e.clientY; s.setPointerCapture(e.pointerId) };
+    s.onpointermove=e=>{ if(y0==null)return; dy=Math.max(0,e.clientY-y0); s.style.transform=`translateY(${dy}px)` };
+    s.onpointerup=()=>{ if(dy>90) this.close(); else s.style.transform=''; y0=null; dy=0 };
+  },
+  close(){ const s=$('#sheet'); s.classList.remove('on'); s.style.transform=''; setTimeout(()=>{s.hidden=true;$('#scrim').hidden=true},280) },
+  trade(id){ const t=T.find(x=>x.id===id); if(!t)return; this.open(detailHTML(t)) }
 };
-
-/* ---------- install (Android/Chrome prompt, iOS instructions) ---------- */
-const Install={evt:null,
-  standalone(){return matchMedia('(display-mode: standalone)').matches||navigator.standalone===true},
-  ios(){return /iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)},
-  available(){return !this.standalone()&&(!!this.evt||this.ios())},
-  async go(){if(this.evt){this.evt.prompt();const r=await this.evt.userChoice;this.evt=null;this.renderButtons();if(r&&r.outcome==='accepted')UI.toast('Installing Swing Desk',null,null,3000)}
-    else if(this.ios())Sheet.open('ios')},
-  renderButtons(){for(const b of $$('[data-install]'))b.hidden=!this.available();const s=$('#install-state');if(s)s.textContent=this.standalone()?'Installed: running as an app.':this.evt?'Ready to install.':this.ios()?'On iPhone/iPad: Share > Add to Home Screen.':'Your browser offers install from its menu when supported (Chrome, Edge, Samsung Internet).'}
+const Theme={
+  get(){ return localStorage.getItem('sd.theme')||'system' },
+  apply(){
+    const m=this.get();
+    const dark = m==='dark' || (m!=='light' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme=dark?'dark':'light';
+    const meta=document.querySelector('meta[name=theme-color]');
+    if(meta) meta.content = dark ? '#000000' : '#f2f2f7';
+  }
 };
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();Install.evt=e;Install.renderButtons()});
-window.addEventListener('appinstalled',()=>{Install.evt=null;Install.renderButtons()});
-
-/* ---------- service worker + update prompt ---------- */
-const SW={reg:null,
-  async init(){if(!('serviceWorker' in navigator)||location.protocol==='file:')return;
-    try{this.reg=await navigator.serviceWorker.register('sw.js',{scope:'./'})}catch(e){console.warn('SW registration failed',e);return}
-    const r=this.reg;const prompt=w=>UI.toast('Update available',`Reload`,()=>{SW.wantReload=true;w.postMessage({type:'SKIP_WAITING'})});
-    if(r.waiting&&navigator.serviceWorker.controller)prompt(r.waiting);
-    r.addEventListener('updatefound',()=>{const w=r.installing;if(!w)return;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)prompt(w)})});
-    let reloading=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(reloading||!SW.wantReload)return;reloading=true;location.reload()})},
-  check(){if(this.reg)this.reg.update().catch(()=>{})}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{ if(Theme.get()==='system') Theme.apply() });
+const Install={
+  deferred:null,
+  init(){
+    addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); this.deferred=e; this.paint() });
+    addEventListener('appinstalled',()=>{ this.deferred=null; this.paint() });
+    this.paint();
+  },
+  ios(){ return /iphone|ipad|ipod/i.test(navigator.userAgent) && !matchMedia('(display-mode: standalone)').matches },
+  paint(){
+    const standalone=matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    $$('[data-install]').forEach(b=>{ b.hidden = standalone && !this.ios() });
+    const s=$('#install-state'); if(!s)return;
+    if(standalone) s.textContent='Installed on this device.';
+    else if(this.deferred) s.textContent='Ready to install.';
+    else if(this.ios()) s.textContent='On iPhone or iPad: Share, then Add to Home Screen.';
+    else s.textContent='Install from the browser menu if the button is not offered.';
+  },
+  async go(){
+    UI.haptic(10);
+    if(this.deferred){ this.deferred.prompt(); await this.deferred.userChoice; this.deferred=null; this.paint(); return }
+    if(this.ios()){ $('#sheet-ios').hidden=false; $('#scrim').hidden=false; return }
+    UI.toast('Use the browser menu to install');
+  }
 };
+const SW={reg:null, wantReload:false,
+  async init(){ if(!('serviceWorker' in navigator)||location.protocol==='file:')return;
+    try{ this.reg=await navigator.serviceWorker.register('sw.js',{scope:'./'}) }catch(e){ return }
+    const prompt=w=>UI.toast('Update available','Reload',()=>{ SW.wantReload=true; w.postMessage({type:'SKIP_WAITING'}) });
+    if(this.reg.waiting&&navigator.serviceWorker.controller) prompt(this.reg.waiting);
+    this.reg.addEventListener('updatefound',()=>{ const nw=this.reg.installing; if(!nw)return; nw.addEventListener('statechange',()=>{ if(nw.state==='installed'&&navigator.serviceWorker.controller) prompt(nw) }) });
+    let reloading=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{ if(reloading||!SW.wantReload)return; reloading=true; location.reload() });
+  },
+  check(){ if(this.reg) this.reg.update().catch(()=>{}) }
+};
+function paintKeyState(){
+  const s=$('#key-state'); if(!s)return;
+  s.textContent = Live.key()? 'A key is saved on this device.' : 'No key on this device.';
+}
 
-/* ---------- render + data loading ---------- */
-let rendered=false,navio=null;
-function stackTables(root){for(const tb of $$('table.stack',root||document)){const hs=$$('thead th',tb).map(h=>h.textContent.trim());
-  for(const tr of $$('tbody tr',tb)){let i=0;for(const td of tr.children){td.dataset.label=hs[i]||'';i+=+(td.getAttribute('colspan')||1)}}}}
-function afterPartial(root){stackTables(root);observe(root);UI.applyLive()}
+state.tab=qs.get('tab')||'home'; state.ins='perf'; state.act='fills';
+const scrollMem={};
 function render(){
-  const y=scrollY,open=$$('.tc.open').map(c=>c.id);
-  $('#app').innerHTML='<div class="feed-note" id="feed-note" role="status"></div>'+hero()+accountSec()+tradesSec()+scanSec()+activitySec()+learningSec()+recordSec()+glossarySec()+footer();
-  renderAccount();renderCards();stackTables();observe();if(!rendered)counters();
-  for(const id of open){const c=document.getElementById(id);if(c){c.classList.add('open');const b=$('.drawer-btn',c);if(b)b.setAttribute('aria-expanded','true')}}
-  if(qs.has('open'))$$('.tc').slice(0,+qs.get('open')||1).forEach(c=>c.classList.add('open'));
-  if(qs.has('shift'))$('#app').style.marginTop=(-(+qs.get('shift')))+'px';
-  if(rendered)scrollTo(0,y);
-  if(navio)navio.disconnect();
-  if('IntersectionObserver' in window){navio=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){$$('#links a,#tabs a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id))}}),{rootMargin:'-45% 0px -50% 0px'});$$('main section').forEach(s=>navio.observe(s))}
-  {const _l=Market.label();$('#mkt-txt').textContent=_l;$('.stat-pill').title=_l;}$('#mkt-dot').classList.toggle('live',Market.isOpen());
-  Live.seed();UI.applyLive();rendered=true;
+  $('#app').innerHTML=screen();
+  const title=$('#title'); if(title) title.textContent=TITLES[state.tab]||'Swing Desk';
+  $$('#tabs [data-tab]').forEach(b=>b.classList.toggle('on', b.dataset.tab===state.tab && !b.classList.contains('feed')));
+  paintKeyState();
+  bindChart($('#app'));
+  UI.applyLive();
+  if(state.tab==='settings') wireSettings();
 }
-const Net={ok:true,checked:0};
+function gotoTab(tab){
+  if(!TITLES[tab]) return;
+  if(tab===state.tab){ scrollTo({top:0, behavior: STATIC?'auto':'smooth'}); return }
+  scrollMem[state.tab]=scrollY; state.tab=tab; render(); scrollTo(0, scrollMem[tab]||0); UI.haptic(8);
+}
+function wireSettings(){
+  const inp=$('#key-in'); if(!inp||inp.dataset.wired) return; inp.dataset.wired='1';
+  $('#key-show').onclick=()=>{ inp.type = inp.type==='password'?'text':'password'; $('#key-show').textContent=inp.type==='password'?'Show':'Hide' };
+  $('#key-test-btn').onclick=async()=>{ const k=inp.value.trim(); const o=$('#key-test'); if(!k){o.textContent='Paste a key first.';return} o.textContent='Testing…'; const r=await Live.test(k); o.textContent=r.ok?'Connected. SPY '+n(r.px)+'.':' '+r.err };
+  $('#key-save').onclick=async()=>{ const k=inp.value.trim(); const o=$('#key-test'); if(!k){o.textContent='Paste a key first.';return} o.textContent='Testing…'; const r=await Live.test(k); if(!r.ok){o.textContent=r.err+' Not saved.';return} Live.setKey(k); inp.value=''; await Live.start(); paintKeyState(); UI.applyLive(); o.textContent='Saved on this device. SPY '+n(r.px)+'.' };
+  $('#key-remove').onclick=()=>{ Live.setKey(''); Live.stop(true); Live.state='nokey'; Live.err=''; Prices.seed(D); paintKeyState(); UI.applyLive(); $('#key-test').textContent='Key removed from this device.' };
+  const sw=$('#sw-check'); if(sw) sw.onclick=()=>{ SW.check(); UI.toast('Checking for an update') };
+}
+const Net={ok:true};
 async function loadData(){
-  if(location.protocol==='file:'){UI.stamp();return}
-  try{const r=await fetch('data.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();
-    Net.ok=r.headers.get('X-SD-Offline')!=='1';Net.checked=Date.now();const first=!D,changed=first||d.generated_at!==D.generated_at;
-    if(changed){setData(d);render();if(!first&&rendered)UI.toast(`New ledger data (written ${esc(String(d.generated_at).slice(11,16))} ET)`,null,null,6000);
-      if(first&&Live.key())Live.start();else Live.resubscribe()}
-  }catch(e){Net.ok=false;if(!D)$('#app').innerHTML=`<div class="card empty" style="margin-top:40px">Could not load the ledger (data.json): ${esc(e.message)}. ${navigator.onLine?'Retrying every minute.':'You are offline.'}</div>`}
-  UI.stamp();const off=$('#offline');if(off)off.hidden=Net.ok&&navigator.onLine;
+  if(location.protocol==='file:'){ UI.stamp(); return }
+  try{
+    const firstFetch=!D; const r=await fetch(firstFetch?'data.json':'data.json?t='+Date.now(), firstFetch?{}:{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    Net.ok=r.headers.get('X-SD-Offline')!=='1';
+    const first=!D, changed=first||d.generated_at!==D.generated_at;
+    if(changed){ setData(d); Live.seed(); render(); if(!first) UI.toast('Ledger updated '+String(d.as_of||d.generated_at).slice(11,16)+' ET'); if(first&&Live.key()) Live.start(); else Live.resubscribe() }
+  }catch(e){
+    Net.ok=false;
+    if(!D) $('#app').innerHTML='<div class="empty">Could not load the ledger. '+(navigator.onLine?'Retrying.':'You are offline.')+'</div>';
+  }
+  UI.stamp();
+  const off=$('#offline'); if(off) off.hidden=Net.ok&&navigator.onLine;
+  const p=$('#pull span'); if(p) p.textContent='Pull to refresh';
 }
-
-/* ---------- boot ---------- */
-if(window.__SD_DATA__){setData(window.__SD_DATA__);render();if(Live.key())Live.start()}
-else $('#app').innerHTML='<div class="skel"><div class="card"></div><div class="card"></div><div class="card"></div></div>';
+function wake(){ if(document.visibilityState==='hidden') return; loadData(); Live.wake(); SW.check() }
+if(window.__SD_DATA__){ setData(window.__SD_DATA__); Live.seed(); render(); if(Live.key()) Live.start() }
+else $('#app').innerHTML='<div class="skel"></div>';
 loadData();
-setInterval(loadData,60e3);
-setInterval(()=>{Live.tick();{const _l=Market.label();$('#mkt-txt').textContent=_l;$('.stat-pill').title=_l;}$('#mkt-dot').classList.toggle('live',Market.isOpen())},15e3);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){loadData();SW.check();Live.tick()}});
-addEventListener('online',loadData);addEventListener('offline',()=>{const o=$('#offline');if(o)o.hidden=false});
-let rz;addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>{if(!D)return;const w=innerWidth;if(Math.abs(w-(window.__lw||w))>80){window.__lw=w;render()}},300)});window.__lw=innerWidth;
-SW.init();Install.renderButtons();
-document.addEventListener('click',e=>{
-  const op=e.target.closest('[data-open]');if(op){e.preventDefault();Sheet.open(op.dataset.open);return}
-  if(e.target.closest('[data-close]')||e.target.id==='scrim'){Sheet.close();return}
-  const ds=e.target.closest('[data-dismiss]');if(ds){UI.dismiss(ds.dataset.dismiss);return}
-  if(e.target.closest('[data-install]')){Install.go();return}
-  const tab=e.target.closest('#tabs a,#more-links a');if(tab){Sheet.close()}
-  const a=e.target.closest('[data-acct]');if(a&&a.closest('#acct-seg')){state.acct=a.dataset.acct;renderAccount();afterPartial($('#acct-body'));return}
-  const r=e.target.closest('[data-recs]');if(r){state.recs=r.dataset.recs;renderCards();afterPartial($('#cards'));return}
-  const g=e.target.closest('[data-goacct]');if(g){state.acct=g.dataset.goacct;state.recs=g.dataset.goacct;renderAccount();renderCards();afterPartial();$('#account').scrollIntoView();return}
-  const f=e.target.closest('[data-fill]');if(f&&f.dataset.fill){e.preventDefault();state.acct=f.dataset.acct;renderAccount();afterPartial($('#acct-body'));const row=document.getElementById('fill-'+f.dataset.fill);if(row){row.scrollIntoView({block:'center'});row.classList.add('flash')}return}
-  const gt=e.target.closest('[data-goto]');if(gt){const t=T.find(x=>x.ticker===gt.dataset.goto&&x.status!=='CANCELLED');if(t){state.recs=t.book;renderCards();afterPartial($('#cards'));const c=document.getElementById('tc-'+t.id);if(c)c.scrollIntoView({block:'start'})}return}
-  const tq=e.target.closest('a.tq[href^="#tc-"]');if(tq){const t=T.find(x=>'#tc-'+x.id===tq.getAttribute('href'));if(t&&state.recs!==t.book&&state.recs!=='all'){e.preventDefault();state.recs=t.book;renderCards();afterPartial($('#cards'));const c=document.getElementById('tc-'+t.id);if(c)c.scrollIntoView({block:'start'})}return}
-  const b=e.target.closest('.drawer-btn');if(b){const c=b.closest('.tc');c.classList.toggle('open');b.setAttribute('aria-expanded',c.classList.contains('open'))}
+setInterval(loadData, 60e3);
+setInterval(()=>Live.tick(), 15e3);
+document.addEventListener('visibilitychange', wake);
+addEventListener('pageshow', e=>{ Live.wake(); if(e.persisted) loadData() });
+addEventListener('online', loadData);
+addEventListener('offline', ()=>{ const o=$('#offline'); if(o) o.hidden=false });
+let py=0;
+addEventListener('touchstart', e=>{ py=e.touches[0].clientY }, {passive:true});
+addEventListener('touchmove', e=>{
+  if(scrollY>2) return;
+  const dy=e.touches[0].clientY-py; const p=$('#pull');
+  if(dy>24){ p.classList.add('show'); p.style.height=Math.min(56, dy*0.35)+'px' }
+}, {passive:true});
+addEventListener('touchend', ()=>{
+  const p=$('#pull');
+  if(p.classList.contains('show') && parseFloat(p.style.height)>32){ const s=$('#pull span'); if(s)s.textContent='Refreshing'; loadData(); UI.haptic(8) }
+  p.classList.remove('show'); p.style.height='0px';
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape')Sheet.close()});
-$('#key-test-btn').addEventListener('click',()=>Settings.test());
-$('#key-save').addEventListener('click',()=>Settings.save());
-$('#key-remove').addEventListener('click',()=>Settings.remove());
-$('#key-show').addEventListener('click',()=>{const i=$('#key-in');i.type=i.type==='password'?'text':'password';$('#key-show').textContent=i.type==='password'?'Show':'Hide'});
-$('#sw-check').addEventListener('click',()=>{SW.check();UI.toast('Checking for an update...',null,null,2500)});
-if(qs.has('sheet'))Sheet.open(qs.get('sheet'));
+addEventListener('scroll', ()=>{ document.body.classList.toggle('scrolled', scrollY>12) }, {passive:true});
+document.addEventListener('click', e=>{
+  const tab=e.target.closest('[data-tab]'); if(tab){ gotoTab(tab.dataset.tab); return }
+  const th=e.target.closest('[data-theme-set]'); if(th){ localStorage.setItem('sd.theme', th.dataset.themeSet); Theme.apply(); render(); return }
+  const ac=e.target.closest('[data-acct]'); if(ac){ state.acct=ac.dataset.acct; render(); return }
+  const rc=e.target.closest('[data-recs]'); if(rc){ state.recs=rc.dataset.recs; render(); return }
+  const act=e.target.closest('[data-act]'); if(act){ state.act=act.dataset.act; render(); return }
+  const ins=e.target.closest('[data-ins]'); if(ins){ state.ins=ins.dataset.ins; render(); return }
+  const tr=e.target.closest('[data-trade]'); if(tr){ if(held){held=false;return} Sheet.trade(tr.dataset.trade); return }
+  const jp=e.target.closest('[data-jump]'); if(jp){ const t=T.find(x=>(x.status==='OPEN'||x.status==='PENDING')&&x.ticker===jp.dataset.jump); if(t) Sheet.trade(t.id); return }
+  if(e.target.closest('[data-install]')){ Install.go(); return }
+  if(e.target.closest('[data-close]')||e.target.id==='scrim'){ Sheet.close(); $('#sheet-ios').hidden=true; $('#scrim').hidden=true; return }
+  const dis=e.target.closest('[data-dismiss]'); if(dis){ const seen=JSON.parse(sessionStorage.getItem('sd.x')||'{}'); seen[dis.dataset.dismiss]=1; sessionStorage.setItem('sd.x', JSON.stringify(seen)); UI.applyLive() }
+});
+let hold, held=false;
+document.addEventListener('pointerdown', e=>{
+  const tr=e.target.closest('[data-trade]'); if(!tr) return;
+  hold=setTimeout(()=>{ held=true; UI.haptic(18); const t=T.find(x=>x.id===tr.dataset.trade); if(!t)return;
+    Sheet.open(`<div class="sheet-h"><div class="grab"></div><button class="x" data-close>Close</button></div><div class="sheet-body"><h2>${esc(t.ticker)}</h2><button class="btn" id="act-open">View position</button><button class="btn" id="act-copy">Copy ticker</button></div>`);
+    $('#act-open').onclick=()=>Sheet.trade(t.id);
+    $('#act-copy').onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(t.ticker); UI.toast('Copied '+t.ticker); Sheet.close() };
+  }, 520);
+});
+document.addEventListener('pointerup', ()=>clearTimeout(hold));
+document.addEventListener('pointermove', ()=>clearTimeout(hold));
+Theme.apply(); Install.init(); SW.init();
 window.__ok=true;
 
 })();
