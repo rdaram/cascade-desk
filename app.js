@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='3bd9e44402';
+const APP_VERSION='e378850c7d';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -175,6 +175,28 @@ function positionsView(){
   </section>`;
 }
 
+function near(a,b){return a!=null&&b!=null&&Math.abs(+a-+b)<0.015}
+function levelBits(src){
+  const o=src||{};
+  return {entry:o.entry, stop:o.stop, t1:o.t1, t2:o.t2};
+}
+/* Tiles and this sentence both read reasoning.levels (rebased to the fill). plan is the original. */
+function levelSentence(t){
+  const lv=(t.reasoning||{}).levels||{};
+  const o=t.entry_order||{};
+  const kind=o.kind==='buy_stop'?'buy-stop':o.kind==='limit_zone'?'limit':'entry';
+  const ent=lv.entry!=null?lv.entry:entryRef(t);
+  const name=(SETUPN[t.setup_type]||(t.direction==='short'?'Short':'Long'));
+  return `${name}: ${kind} ${n(ent)}, stop ${n(lv.stop)}, T1 ${n(lv.t1)}, T2 ${n(lv.t2)}.`;
+}
+function rebaseNote(t){
+  const lv=(t.reasoning||{}).levels||{}, pl=t.plan||{};
+  if(!pl.entry&&pl.t1==null) return '';
+  const moved=!near(pl.entry,lv.entry)||!near(pl.t1,lv.t1)||!near(pl.t2,lv.t2)||!near(pl.stop,lv.stop);
+  if(!moved) return '';
+  const fill=entryRef(t);
+  return `Targets re-based to the ${n(fill)} fill. Original plan: ${n(pl.entry)}, stop ${n(pl.stop)}, T1 ${n(pl.t1)}, T2 ${n(pl.t2)}.`;
+}
 function detailHTML(t){
   const r=t.reasoning||{}, lv=r.levels||{}, wl=r.why_levels||{}, pl=t.plan||{};
   const [st,sc]=status(t), p=shownPnl(t), cf=conf(t);
@@ -201,10 +223,13 @@ function detailHTML(t){
         <div><span>Order</span><b>${esc(orderText(t))}</b></div>
       </div>
       <div class="prose">
-        ${r.summary?`<p>${esc(r.summary)}</p>`:''}
+        <p class="levels-now">${esc(levelSentence(t))}</p>
+        ${rebaseNote(t)?`<p class="fine rebase">${esc(rebaseNote(t))}</p>`:''}
         ${r.why_stock?`<h3>Why this stock</h3><p>${esc(r.why_stock)}</p>`:''}
         ${r.why_now?`<h3>Why now</h3><p>${esc(r.why_now)}</p>`:''}
-        ${wl.entry?`<h3>Why these levels</h3><p>${esc(wl.entry)}</p><p>${esc(wl.stop||'')}</p><p>${esc(wl.t1||'')} ${esc(wl.t2||'')}</p>`:''}
+        <h3>Why these levels</h3>
+        <p>Stop ${n(lv.stop)}, T1 ${n(lv.t1)}, T2 ${n(lv.t2)}, from the same levels as the tiles above${rebaseNote(t)?', after the fill':''}.</p>
+        ${wl.entry?`<p class="fine">As issued: ${esc(wl.entry)} ${esc(wl.stop||'')} ${esc(wl.t1||'')} ${esc(wl.t2||'')}</p>`:''}
         ${risks?`<h3>What could go wrong</h3><ul>${risks}</ul>`:''}
         ${(r.confidence||{}).why?`<h3>Confidence</h3><p>${esc(r.confidence.why)}</p>`:''}
         ${t.why_not_main_detail?`<h3>Why it is not in Main</h3><p>${esc(t.why_not_main_detail)}</p>`:''}
@@ -581,13 +606,13 @@ function bindChart(root){
   });
 }
 const Sheet={
-  open(html){ const s=$('#sheet'), sc=$('#scrim'); s.innerHTML=html; s.hidden=false; sc.hidden=false; requestAnimationFrame(()=>s.classList.add('on')); UI.haptic(12); bindChart(s);
+  open(html){ const s=$('#sheet'), sc=$('#scrim'); s.innerHTML=html; s.hidden=false; sc.hidden=false; document.body.classList.add('sheet-open'); requestAnimationFrame(()=>s.classList.add('on')); UI.haptic(12); bindChart(s);
     const body=$('#sheet-body',s)||s; let y0=null, dy=0;
     s.querySelector('.grab').onpointerdown=e=>{ y0=e.clientY; s.setPointerCapture(e.pointerId) };
     s.onpointermove=e=>{ if(y0==null)return; dy=Math.max(0,e.clientY-y0); s.style.transform=`translateY(${dy}px)` };
     s.onpointerup=()=>{ if(dy>90) this.close(); else s.style.transform=''; y0=null; dy=0 };
   },
-  close(){ const s=$('#sheet'); s.classList.remove('on'); s.style.transform=''; setTimeout(()=>{s.hidden=true;$('#scrim').hidden=true},280) },
+  close(){ const s=$('#sheet'); s.classList.remove('on'); s.style.transform=''; document.body.classList.remove('sheet-open'); setTimeout(()=>{s.hidden=true;$('#scrim').hidden=true},280) },
   trade(id){ const t=T.find(x=>x.id===id); if(!t)return; this.open(detailHTML(t)) }
 };
 const Theme={
@@ -645,7 +670,9 @@ state.tab=qs.get('tab')||'home'; state.ins='perf'; state.act='fills';
 const scrollMem={};
 function render(){
   $('#app').innerHTML=screen();
-  const title=$('#title'); if(title) title.textContent=TITLES[state.tab]||'Swing Desk';
+  const name=TITLES[state.tab]||'Swing Desk';
+  const title=$('#title'); if(title) title.textContent=name;
+  const c=$('#title-compact'); if(c) c.textContent=name;
   $$('#tabs [data-tab]').forEach(b=>b.classList.toggle('on', b.dataset.tab===state.tab && !b.classList.contains('feed')));
   paintKeyState();
   bindChart($('#app'));
@@ -730,6 +757,14 @@ document.addEventListener('pointerdown', e=>{
 });
 document.addEventListener('pointerup', ()=>clearTimeout(hold));
 document.addEventListener('pointermove', ()=>clearTimeout(hold));
+document.getElementById('install-dismiss').onclick=()=>{ localStorage.setItem('sd.install.dismissed','1'); const b=document.getElementById('install-banner'); if(b) b.hidden=true };
+function paintBanner(){
+  const b=document.getElementById('install-banner'); if(!b) return;
+  const standalone=matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  b.hidden = standalone || localStorage.getItem('sd.install.dismissed')==='1';
+}
+paintBanner();
+addEventListener('appinstalled', paintBanner);
 Theme.apply(); Install.init(); SW.init();
 window.__ok=true;
 
