@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='96f9581b82';
+const APP_VERSION='22c90b98f0';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -423,6 +423,7 @@ function guideSteps(t){
     let buy=o.kind==='limit_zone'
       ?`Buy only if the price falls to ${usd(ent,2)}${now}.`
       :`Buy only if the price rises to ${usd(ent,2)}${now}.`;
+    if(t.watch&&t.wait==='weak') buy='The system is not buying yet. The market is too weak. '+buy;
     if(exp) buy+=` Order expires ${exp}.`;
     if(sz&&sz.shares!=null) buy+=` With ${usd(sz.mine,0)}: buy ${n(sz.shares, 4)} shares (about ${usd(sz.amount,0)}).`;
     steps.push(buy);
@@ -746,51 +747,76 @@ function potentialLine(t){
   if(!g&&gPct==null) return '';
   return `Potential: ${g} (${gPct==null?'':pct(gPct)}) / risk ${r} (${rPct==null?'':pct(rPct)})`;
 }
-function feedCard(t){
+function icoLine(kind){
+  const d={
+    enter:'M12 19V5M6 11l6-6 6 6',
+    profit:'M4 16l5-5 3 3 8-8M14 6h6v6',
+    stop:'M12 3l8 4v6c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V7z',
+    time:'M12 8v5l3 2M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z'
+  }[kind];
+  return `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+}
+function odo(text, cls){
+  const bits=[...String(text||'')].map(ch=>`<span class="odig"><span>${esc(ch)===' '?'&nbsp;':esc(ch)}</span></span>`).join('');
+  return `<span class="odo ${cls||''}">${bits}</span>`;
+}
+function fromWatch(w){
+  const lv=w.levels||{}, o=w.order||{};
+  return {id:'w-'+w.ticker, ticker:w.ticker, name:w.name, status:'PENDING', watch:true, wait:w.wait, book:'main',
+    size_small:w.size_small, reasoning:{levels:lv},
+    entry_order:{kind:o.kind, trigger:o.trigger||lv.entry, zone:o.zone},
+    earnings:w.earnings_date?{date:w.earnings_date}:{}, time_stop_weeks:w.hold_weeks};
+}
+function feedCard(t, i){
   const lv=(t.reasoning||{}).levels||{};
   const open=t.status==='OPEN';
   const sz=sizeView(t);
   const sh=sz&&sz.shares!=null?n(sz.shares,4)+' shares at ':'';
   const ent=open?entryRef(t):trigPx(t);
   const when=t.opened_at||t.created_at;
-  const enter=open
-    ? `Bought ${sh}${usd(ent,2)} · ${dshort(when)}`
-    : `Buy ${sh}${usd(ent,2)}`;
-  const aw=awayPair(t);
-  const until=(t.entry_order||{}).valid_until;
-  const wait=!open&&aw?`<p class="tstate" data-wait="${t.id}">Waiting · ${susd(aw.d,2)} (${n(Math.abs(aw.pct),1)}%) away${until?' · until '+dshort(until):''}</p>`:'';
+  const enter=open ? `Bought ${sh}${usd(ent,2)} · ${dshort(when)}` : `Buy ${sh}${usd(ent,2)}`;
+  let waitLine='';
+  if(t.watch) waitLine=t.wait==='weak' ? 'Waiting · market too weak to buy' : `Waiting for ${usd(ent,2)}`;
+  else if(!open){
+    const aw=awayPair(t), until=(t.entry_order||{}).valid_until;
+    if(aw) waitLine=`Waiting · ${susd(aw.d,2)} (${n(Math.abs(aw.pct),1)}%) away${until?' · until '+dshort(until):''}`;
+  }
   const exit1=`Take half at ${usd(lv.t1,2)} · rest at ${usd(lv.t2,2)}`;
-  const exit2=`Sell all if it drops to ${usd(lv.stop,2)}${t.time_stop?' · or by '+dshort(t.time_stop):''}`;
+  const bye=t.time_stop?`or by ${dshort(t.time_stop)}`:(t.time_stop_weeks?`Within ${t.time_stop_weeks} weeks`:'');
+  const exit2=`Sell all if it drops to ${usd(lv.stop,2)}`;
+  const line=open?miniPnl(t):null;
   const profit=open
-    ? (()=>{const line=miniPnl(t); return line?`<p class="tprofit num ${line.cls}" data-mini="${t.id}">${line.text}</p>`:'';})()
+    ? (line?`<p class="tprofit" data-mini="${t.id}">${odo(line.text, line.cls)}</p>`:'')
     : `<p class="tprofit quiet">${esc(potentialLine(t))}</p>`;
   const steps=guideSteps(t).map(x=>`<li>${esc(x)}</li>`).join('');
-  const openAttr=state.feedOpen===t.id?'':'hidden';
-  return `<article class="tcard">
+  const on=state.feedOpen===t.id?' on':'';
+  const tone=open?(line&&line.cls==='neg'?'neg':'pos'):'wait';
+  return `<article class="tcard ${tone}" style="--i:${i||0}">
     <button type="button" class="hit" data-card="${t.id}">
       <b class="tk">${esc(t.ticker)}</b>
       <span class="co">${esc(t.name||'')}</span>
-      <p class="tenter">${esc(enter)}</p>
-      ${wait}
-      <p class="texit">${esc(exit1)}</p>
-      <p class="texit sub">${esc(exit2)}</p>
+      <p class="trow">${icoLine('enter')}<span><em>Enter</em>${esc(enter)}</span></p>
+      ${waitLine?`<p class="tstate">${esc(waitLine)}</p>`:''}
+      <p class="trow">${icoLine('profit')}<span><em>Take profit</em>${esc(exit1)}</span></p>
+      <p class="trow">${icoLine('stop')}<span><em>Safety exit</em>${esc(exit2)}</span></p>
+      ${bye?`<p class="trow">${icoLine('time')}<span><em>Time</em>${esc(bye)}</span></p>`:''}
       ${profit}
     </button>
-    <div class="steps" ${openAttr}>
+    <div class="steps${on}"><div class="steps-in">
       <ol class="guide">${steps}</ol>
-      <button type="button" class="todo" data-copy="${t.id}">Copy</button>
-    </div>
+      <button type="button" class="todo" data-copy="${t.id}"><svg class="ck" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg><span>Copy</span></button>
+    </div></div>
   </article>`;
 }
 function missionHTML(){
   const m=D.mission||{};
-  const start=m.start!=null?m.start:150, goal=m.goal!=null?m.goal:100000;
+  const goal=m.goal!=null?m.goal:100000;
   let prog=m.progress_pct!=null?+m.progress_pct:(m.progress!=null?+m.progress:0);
   if(prog>0&&prog<=1) prog*=100;
   prog=Math.max(0, Math.min(100, prog||0));
   const eqv=m.current_equity!=null?m.current_equity:m.equity;
-  const eq=eqv!=null?` · ${usd(eqv,2)}`:'';
-  return `<button type="button" id="mission" class="mission"><b class="num">${usd(start,0)} → ${usd(goal,0)}${eq}</b><span class="mbar" aria-hidden="true"><i style="width:${prog.toFixed(2)}%"></i></span></button>`;
+  const eq=eqv!=null?usd(eqv,2):usd(m.start!=null?m.start:150,2);
+  return `<button type="button" id="mission" class="mission"><b class="hero-eq num">${eq}</b><span class="goal">Goal ${usd(goal,0)}</span><span class="mbar" style="--p:${prog.toFixed(2)}%" aria-hidden="true"><i></i></span></button>`;
 }
 function feedView(){
   const rows=T.filter(onFeed);
@@ -799,10 +825,15 @@ function feedView(){
     const da=awayPair(a), db=awayPair(b);
     return Math.abs((da&&da.pct)||99)-Math.abs((db&&db.pct)||99);
   });
+  const watch=(D.watch||[]).map(fromWatch);
   const mine=+localStorage.getItem('sd.acct.size')||150;
-  const body=rows.length
-    ? `${open.map(feedCard).join('')}${open.length&&pend.length?'<p class="nextlab">Next</p>':''}${pend.map(feedCard).join('')}<p class="for150">For ${usd(mine,0)}</p>`
-    : `<p class="empty-feed">No trade yet. Next scan 8:46 AM.</p>`;
+  let i=0;
+  const cards=open.map(t=>feedCard(t, i++)).join('')+pend.map(t=>feedCard(t, i++)).join('');
+  const next=watch.length?`<p class="nextlab">Next up</p>`+watch.map(t=>feedCard(t, i++)).join(''):'';
+  const any=rows.length||watch.length;
+  const body=any
+    ? cards+next+`<p class="for150">For ${usd(mine,0)}</p>`
+    : `<div class="empty-hero"><span class="empty-mark" aria-hidden="true"></span><p>No trade yet</p><p>Next scan 8:46 AM</p></div>`;
   return `<section data-screen="feed">${missionHTML()}${body}</section>`;
 }
 function screen(){ return feedView(); }
@@ -1019,7 +1050,7 @@ const UI = {
     }
     const nav=this.navState(), m=$('#mkt'), mt=$('#mkt-t');
     if(m){ m.classList.remove('live','ah','closed'); m.classList.add(nav.c); m.title=nav.title }
-    if(mt) mt.textContent=nav.hm||'';
+    if(mt) mt.textContent=nav.label;
   },
   applyLive(){
     if(!D)return;
@@ -1032,7 +1063,7 @@ const UI = {
     $$('[data-dist]').forEach(el=>{ const parts=el.dataset.dist.split('|'); const t=T.find(x=>x.id===parts[0]); if(!t)return; const phrase=distPhrase(t, parts[2]||'', +parts[1]); if(!phrase)return; el.textContent=phrase; const pair=distPair(t,+parts[1]); const signed=parts[2]==='Entry'?-pair.d:pair.d; el.classList.remove('pos','neg','mute'); el.classList.add(cls(signed)) });
     $$('[data-away]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.away); if(!t)return; const aw=awayPair(t); if(!aw)return; el.textContent=moneyPct(aw.d, aw.pct)+' away'; el.classList.remove('pos','neg','mute'); el.classList.add(cls(aw.d)) });
     $$('[data-wait]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.wait); if(!t)return; const aw=awayPair(t); if(!aw)return; const until=(t.entry_order||{}).valid_until; el.textContent='Waiting · '+susd(aw.d,2)+' ('+n(Math.abs(aw.pct),1)+'%) away'+(until?' · until '+dshort(until):''); });
-    $$('[data-mini]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.mini); if(!t||t.status!=='OPEN')return; const line=miniPnl(t); if(!line)return; el.textContent=line.text; el.classList.remove('pos','neg','mute'); el.classList.add(line.cls); });
+    $$('[data-mini]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.mini); if(!t||t.status!=='OPEN')return; const line=miniPnl(t); if(!line||el.dataset.v===line.text)return; el.dataset.v=line.text; el.innerHTML=odo(line.text,line.cls); });
     const bn=$('#bell-n'); if(bn){ const n=T.filter(t=>rowAlert(t)).length; bn.hidden=!n; bn.textContent=String(n); }
     $$('[data-dot]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.dot); const tr=el.closest('[data-track]'); if(!t||!tr)return; const px=Val.last(t.ticker); if(px==null)return;
       const s=+tr.dataset.stop, t2=+tr.dataset.t2; if(t2===s)return; el.style.left=Math.max(0,Math.min(100,(px-s)/(t2-s)*100))+'%' });
@@ -1196,7 +1227,7 @@ const Sheet={
   },
   close(fromPop){
     const s=$('#sheet'), sc=$('#scrim');
-    s.classList.remove('on'); s.style.transition='';
+    s.classList.remove('on','set'); s.style.transition='';
     const desk=matchMedia('(min-width:900px)').matches;
     s.style.transform=desk?'translate3d(-50%,110%,0)':'translate3d(0,110%,0)';
     if(sc) sc.style.opacity='0';
@@ -1271,9 +1302,12 @@ let tabGen=0;
 function bustTabs(){ tabGen++; tabPanels.clear(); }
 window.__bustTabs=bustTabs;
 
+function tradeById(id){ return T.find(x=>x.id===id) || (D.watch||[]).map(fromWatch).find(x=>x.id===id); }
 function openGear(){
   const th=localStorage.getItem('sd.theme')||'system';
-  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><h2 class="sheet-title">Settings</h2><label class="lbl" for="acct-size">Account size</label><div class="keyrow"><input id="acct-size" inputmode="decimal" value="${esc(localStorage.getItem('sd.acct.size')||'150')}"></div><p class="lbl">Theme</p><div class="seg">${[['system','System'],['light','Light'],['dark','Dark']].map(([k,l])=>`<button type="button" data-theme-set="${k}" class="${th===k?'on':''}">${l}</button>`).join('')}</div><label class="lbl" for="key-in">Price key</label><div class="keyrow"><input id="key-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Finnhub key"><button type="button" id="key-show" class="btn">Show</button></div><div class="keyrow"><button type="button" id="key-test-btn" class="btn">Test</button><button type="button" id="key-save" class="btn primary">Save</button></div><button type="button" id="key-remove" class="btn danger">Remove key</button><p id="key-test" class="fine" role="status"></p><p id="key-state" class="fine"></p><button type="button" class="btn" id="sw-check">Check for update</button></div>`);
+  const themes=[['system','System'],['light','Light'],['dark','Dark']].map(([k,l])=>`<button type="button" class="setrow ${th===k?'on':''}" data-theme-set="${k}">${l}</button>`).join('');
+  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><h2 class="sheet-title">Settings</h2><div class="setgroup"><label class="setrow" for="acct-size">Account size<input id="acct-size" inputmode="decimal" value="${esc(localStorage.getItem('sd.acct.size')||'150')}"></label>${themes}<label class="setrow" for="key-in">Price key<input id="key-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Finnhub key"></label><div class="setrow">Key <span><button type="button" id="key-show" class="go">Show</button><button type="button" id="key-test-btn" class="go">Test</button></span></div><button type="button" class="setrow" id="sw-check">Check for update</button><button type="button" id="key-remove" class="setrow danger-row">Remove key</button></div><button type="button" id="key-save" class="save">Save</button><p id="key-test" class="fine" role="status"></p><p id="key-state" class="fine"></p></div>`);
+  const sh=$('#sheet'); if(sh) sh.classList.add('set');
   wireSettings();
 }
 let gearTimer=0, gearHeld=false, gearTaps=[];
@@ -1382,8 +1416,8 @@ document.addEventListener('click', e=>{
     if(gearTaps.length>=5){ gearTaps=[]; openGear(); }
     return;
   }
-  const cp=e.target.closest('[data-copy]'); if(cp){ const t=T.find(x=>x.id===cp.dataset.copy); if(!t) return; const text=guideText(t); const done=()=>UI.toast('Copied'); if(navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(done); else done(); return }
-  const card=e.target.closest('[data-card]'); if(card){ state.feedOpen=state.feedOpen===card.dataset.card?null:card.dataset.card; render(true); return }
+  const cp=e.target.closest('[data-copy]'); if(cp){ const t=tradeById(cp.dataset.copy); if(!t) return; const text=guideText(t); const done=()=>{ cp.classList.add('done'); const s=cp.querySelector('span'); if(s) s.textContent='Copied'; }; if(navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(done); else done(); return }
+  const card=e.target.closest('[data-card]'); if(card){ const box=card.closest('.tcard').querySelector('.steps'); if(box){ box.classList.toggle('on'); state.feedOpen=box.classList.contains('on')?card.dataset.card:null; } return }
   if(e.target.closest('#feed-dismiss')){ localStorage.setItem('sd.feed.dismissed','1'); UI.applyLive(); return }
   const cap=e.target.closest('[data-cap]'); if(cap){ state.emph=state.emph==='pct'?'usd':'pct'; localStorage.setItem('sd.emph', state.emph); render(true); return }
   const rg=e.target.closest('[data-range]'); if(rg){ state.range=rg.dataset.range; localStorage.setItem('sd.range', state.range); render(true); return }
@@ -1436,5 +1470,7 @@ window.__chgAudit=function(){
   return {bad, px:bag('[data-px]','px'), day:bag('[data-day]','day'), pl:bag('[data-pl]','pl')};
 };
 window.__ok=true;
+
+window.openGear=openGear;
 
 })();
