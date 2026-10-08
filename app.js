@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='2f7c3ff2e6';
+const APP_VERSION='96f9581b82';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -16,10 +16,11 @@ const cls=x=>x>0?'pos':x<0?'neg':'mute';
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const dshort=s=>{if(!s)return'';const m=String(s).match(/(\d{4})-(\d\d)-(\d\d)(?:[ T](\d\d:\d\d))?/);return m?`${MON[+m[2]-1]} ${+m[3]}${m[4]?', '+m[4]:''}`:s};
 const daysTo=s=>{if(!s)return null;const t=new Date(s.slice(0,10)+'T12:00:00');return Math.round((t-new Date())/864e5)};
-const BOOKN={main:'Main',shadow:'Shadow',mambo:'Mambo'};
+const BOOKN={main:'Main',shadow:'Practice',mambo:'Mine'};
+const BOOKLINE={main:"The system's main paper account",shadow:'Practice trades the system tests before using them for real.',mambo:'Your own picks, separate from the system.'};
 let D=null,T=[],TECH={},ACC={},FILLS=[],RECS=[];
 const state={acct:qs.get('acct')||'main',recs:qs.get('recs')||'main'};
-function setData(d){D=d;T=D.trades||[];TECH=D.technicals||{};ACC=(D.accounts||{}).accounts||{};FILLS=(D.accounts||{}).fills||[];RECS=(D.accounts||{}).recs||[]}
+function setData(d){D=d;T=D.trades||[];TECH=D.technicals||{};ACC=(D.accounts||{}).accounts||{};FILLS=(D.accounts||{}).fills||[];RECS=(D.accounts||{}).recs||[]; if(window.__bustTabs) window.__bustTabs() }
 
 /* ---------- US market clock (ET), NYSE holidays + early closes ---------- */
 const ETF=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',weekday:'short'});
@@ -217,7 +218,7 @@ function areaChart(book, withSpy){
     return {t:r.t, eq:r.eq, d, pct:pc, x:X(i)};
   });
   const since=dshort(rows[0].t).split(',')[0];
-  const label=`Tracking since ${since}`;
+  const label=`Since ${since}`;
   return `<div class="eq-scrub" data-pts="${esc(JSON.stringify(meta))}" data-w="${W}" data-h="${H}">
     <svg class="eq" viewBox="0 0 ${W} ${H}" role="img" aria-label="Equity, ${esc(label)}">
       <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--tint)" stop-opacity=".28"/><stop offset="1" stop-color="var(--tint)" stop-opacity="0"/></linearGradient></defs>
@@ -226,7 +227,6 @@ function areaChart(book, withSpy){
       <circle class="eq-dot" r="4.5" fill="var(--label)" cx="${xy[xy.length-1][0]}" cy="${xy[xy.length-1][1]}"/>
     </svg>
     <div class="eq-tip" hidden></div>
-    <p class="fine">${esc(label)} · started ${usd(rows[0].eq,0)}. Dashed guide is that start.${withSpy?' Gray dashes are the S&amp;P 500 on the same scale, only where both were recorded.':''}</p>
   </div>`;
 }
 
@@ -262,21 +262,23 @@ function rowSub(t, withBook){
   if(name) bits.push(name);
   return bits.filter(Boolean).join(' · ');
 }
-function legendDots(){
-  return `<p class="dotleg"><i class="k stop"></i>Stop <i class="k entry"></i>Entry <i class="k t1"></i>T1 <i class="k t2"></i>T2 <i class="k now"></i>Last</p>`;
-}
+function legendDots(){ return ''; }
 function posCard(t, withBook){
   const pl=pnlPair(t), dm=dayMove(t.ticker);
   const cap=(dm.d!=null&&dm.pct!=null)?`<span class="cap ${cls(dm.d)}" data-cap data-chg data-day="${esc(t.ticker)}">${moneyPct(dm.d, dm.pct)}</span>`:'';
   const pln=(pl.d!=null&&pl.pct!=null)?`<span class="pl ${cls(pl.d)}" data-chg data-pl="${t.id}">${moneyPct(pl.d, pl.pct)}</span>`:(pl.d==null?'':`<span class="pl ${cls(pl.d)}" data-pl="${t.id}">${susd(pl.d,2)}</span>`);
-  return `<button class="prow" data-trade="${t.id}">
-    <div class="pos-r">
-      <div class="pos-id"><b class="tk">${esc(t.ticker)} ${News.dot(t.ticker)} ${alertChip(t)}</b><span class="co">${esc(rowSub(t, withBook))}</span></div>
-      ${spark(t.ticker)}
-      <div class="pos-px"><b class="num px" data-px="${esc(t.ticker)}">${spotOf(t)==null?'n/a':n(spotOf(t))}</b>${cap}${pln}</div>
+  const todo=(t.status==='OPEN'||t.status==='PENDING')?`<button type="button" class="todo" data-todo="${t.id}">What to do</button>`:'';
+  return `<div class="prow">
+    <div class="hit" data-trade="${t.id}" role="button" tabindex="0">
+      <div class="pos-r">
+        <div class="pos-id"><b class="tk">${esc(t.ticker)} ${News.dot(t.ticker)} ${alertChip(t)}</b><span class="co">${esc(rowSub(t, withBook))}</span></div>
+        ${spark(t.ticker)}
+        <div class="pos-px"><b class="num px" data-px="${esc(t.ticker)}">${spotOf(t)==null?'n/a':n(spotOf(t))}</b>${cap}${pln}</div>
+      </div>
+      ${(t.status==='OPEN'||t.status==='PENDING')?track(t):''}
     </div>
-    ${(t.status==='OPEN'||t.status==='PENDING')?track(t):''}
-  </button>`;
+    ${todo}
+  </div>`;
 }
 
 
@@ -308,18 +310,20 @@ function entryState(t){
 function entryCard(t){
   const lv=(t.reasoning||{}).levels||{};
   const ent=trigPx(t), aw=awayPair(t);
-  const book=t.book==='shadow'?'Shadow':'';
-  const extra=[t.scores&&t.scores.total!=null?'Score '+n(t.scores.total,0):'', t.rs!=null?'RS '+t.rs:''].filter(Boolean).join(' · ');
-  return `<button class="ecard" data-trade="${t.id}">
-    <div class="ec-top"><b>${esc(t.ticker)}</b><span class="echip">${esc(trigKind(t))}</span><span class="echip quiet">${esc(SETUPN[t.setup_type]||'')}</span>${book?`<span class="echip quiet">Shadow</span>`:''}</div>
-    <div class="ec-3">
-      <div><span>Entry</span><b class="num">$${n(ent)}</b></div>
-      <div><span>Stop</span><b class="num neg">$${n(lv.stop)}</b></div>
-      <div><span>Target</span><b class="num upv">$${n(lv.t1)}</b><span class="t2">T2 $${n(lv.t2)}</span></div>
+  const who=t.book&&t.book!=='main'?BOOKN[t.book]:'';
+  return `<div class="ecard">
+    <div class="hit" data-trade="${t.id}" role="button" tabindex="0">
+      <div class="ec-top"><b>${esc(t.ticker)}</b><span class="echip">${esc(trigKind(t))}</span></div>
+      <p class="fine">${esc(SETUPN[t.setup_type]||'')}${who?' · '+esc(who):''}</p>
+      <div class="ec-3">
+        <div><span>Entry</span><b class="num">$${n(ent)}</b></div>
+        <div><span>Stop</span><b class="num neg">$${n(lv.stop)}</b></div>
+        <div><span>Target</span><b class="num upv">$${n(lv.t1)}</b><span class="t2">Final $${n(lv.t2)}</span></div>
+      </div>
+      <div class="ec-bot">${aw?`<span class="cap ${cls(aw.d)}" data-chg data-away="${t.id}">${moneyPct(aw.d, aw.pct)} away</span>`:''}<span class="echip">${entryState(t)}</span><span class="fine">${(t.entry_order||{}).valid_until?'Expires '+dshort(t.entry_order.valid_until):''}</span></div>
     </div>
-    <div class="ec-bot">${aw?`<span class="cap ${cls(aw.d)}" data-chg data-away="${t.id}">${moneyPct(aw.d, aw.pct)} away</span>`:''}<span class="echip">${entryState(t)}</span><span class="fine">${(t.entry_order||{}).valid_until?'Expires '+dshort(t.entry_order.valid_until):''}</span></div>
-    ${extra?`<p class="fine">${esc(extra)}</p>`:''}
-  </button>`;
+    <button type="button" class="todo" data-todo="${t.id}">What to do</button>
+  </div>`;
 }
 function pickCard(c){
   const bits=[];
@@ -361,6 +365,89 @@ function newsBlock(t){
   if(!rows.length) return '';
   return `<h2 class="group-h">News</h2><div class="inset">${rows.map(n=>`<a class="inset-row news" href="${esc(n.url)}" target="_blank" rel="noopener"><span><b>${esc(n.headline)}</b><span class="sub2">${esc(n.source||'')} · ${ago(n.t)}${n.big?' · Notable':''}</span></span></a>`).join('')}</div>`;
 }
+
+function watchlistHTML(){
+  const live=String((D.method||{}).version||'');
+  const rows=((D.scan||{}).candidates||[]).filter(c=>!c.booked && String(c.method_version||'')===live && !T.some(t=>t.ticker===c.ticker&&(t.status==='OPEN'||t.status==='PENDING'))).slice(0,4);
+  if(!rows.length) return '';
+  return `<h2 class="group-h">Watchlist</h2><p class="fine">Not orders.</p><div class="group">${rows.map(c=>`<button type="button" class="cell" data-pick="${esc(c.ticker)}"><div class="c1"><b>${esc(c.ticker)}</b><span class="sub2">${esc(SETUPN[c.setup]||c.setup||'')} · not an order</span></div><div class="c3 num">${c.score==null?'':n(c.score,0)}</div></button>`).join('')}</div>`;
+}
+function clipWords(s, max){
+  return String(s||'').replace(/[()[\]]/g,' ').replace(/\s+/g,' ').trim().split(' ').filter(Boolean).slice(0,max).join(' ');
+}
+function reasonBlock(t){
+  const r=t.reasoning||{}, lv=r.levels||{}, o=t.entry_order||{};
+  const why=clipWords((r.summary||'').split(':')[0]||setupName(t), 10);
+  let timing='';
+  if(t.status==='OPEN') timing=clipWords('Filled at '+n(entryRef(t)), 10);
+  else if(o.kind==='buy_stop') timing=clipWords('Buy-stop '+n(o.trigger)+(o.valid_until?' through '+dshort(o.valid_until):''), 10);
+  else if(o.kind==='limit_zone') timing=clipWords('Limit through '+(o.valid_until?dshort(o.valid_until):'this week'), 10);
+  else timing=clipWords(r.why_now||'', 10);
+  const levels=clipWords('Stop '+n(lv.stop)+' first target '+n(lv.t1)+' final '+n(lv.t2), 10);
+  const risk=clipWords(String((r.risks||[])[0]||'').split('.')[0], 10);
+  const conf=clipWords((((r.confidence||{}).rating)||'')+' '+(((r.confidence||{}).plus||[])[0]||''), 10);
+  const rows=[['Why',why,r.why_stock||r.summary||''],['Timing',timing,r.why_now||''],['Levels',levels,levelSentence(t)+' '+(rebaseNote(t)||'')],['Risk',risk,(r.risks||[]).join(' ')],['Confidence',conf,(r.confidence||{}).why||'']];
+  return `<div class="reasons">${rows.filter(x=>x[1]).map(([k,h,body])=>`<details><summary><b>${k}</b><span>${esc(h)}</span></summary>${body?`<p>${esc(body)}</p>`:''}</details>`).join('')}</div>`;
+}
+function sizeView(obj){
+  const raw=obj&&obj.size_small;
+  if(!raw||(raw.shares==null&&raw.dollars==null&&raw.risk_usd==null&&raw.amount==null&&raw.risk==null)) return null;
+  const base=+raw.equity||+raw.account||150;
+  const mine=+localStorage.getItem('sd.acct.size')||150;
+  const k=base?mine/base:1;
+  const sh=raw.shares==null?null:raw.shares*k;
+  const amt=(raw.dollars!=null?raw.dollars:raw.amount);
+  const dollars=amt==null?null:amt*k;
+  const riskRaw=raw.risk_usd!=null?raw.risk_usd:raw.risk;
+  const t1Raw=raw.t1_usd!=null?raw.t1_usd:raw.t1;
+  const t2Raw=raw.t2_usd!=null?raw.t2_usd:raw.t2;
+  const text=(sh!=null||dollars!=null)?`For ${usd(mine,0)}: ${sh!=null?n(sh,4)+' sh':''}${dollars!=null?' · '+usd(dollars,0):''}`:'';
+  return {text, line:text?`<p class="size150">${text}</p>`:'', risk:riskRaw==null?null:riskRaw*k, t1:t1Raw==null?null:t1Raw*k, t2:t2Raw==null?null:t2Raw*k, mine, shares:sh, amount:dollars};
+}
+function guideSteps(t){
+  const lv=(t.reasoning||{}).levels||{};
+  const o=t.entry_order||{};
+  const open=t.status==='OPEN';
+  const ent=open?entryRef(t):trigPx(t);
+  const stop=lv.stop, t1=lv.t1, t2=lv.t2;
+  const px=Val.last(t.ticker);
+  const now=px==null?'':` (it's ${usd(px,2)} now)`;
+  const exp=o.valid_until?dshort(o.valid_until):'';
+  const sz=sizeView(t);
+  const qty=t.contracts_open??t.contracts;
+  const loss=sz&&sz.risk!=null?sz.risk:(qty!=null&&ent!=null&&stop!=null?Math.abs(ent-stop)*qty:null);
+  const lossTxt=loss==null?'':` That caps the loss at about ${usd(Math.abs(loss),0)}.`;
+  const pctOf=(a,b)=>(a!=null&&b)?Math.round((a/b-1)*100):null;
+  const steps=[];
+  if(!open){
+    let buy=o.kind==='limit_zone'
+      ?`Buy only if the price falls to ${usd(ent,2)}${now}.`
+      :`Buy only if the price rises to ${usd(ent,2)}${now}.`;
+    if(exp) buy+=` Order expires ${exp}.`;
+    if(sz&&sz.shares!=null) buy+=` With ${usd(sz.mine,0)}: buy ${n(sz.shares, 4)} shares (about ${usd(sz.amount,0)}).`;
+    steps.push(buy);
+  }else{
+    let own=`You own it at ${usd(ent,2)}.`;
+    const half=t.contracts_initial!=null&&t.contracts_open!=null&&t.contracts_open<t.contracts_initial*0.75;
+    if(half) own+=' You already sold half.';
+    else if(px!=null&&t2!=null&&px>=t2) own+=' The final target is reached.';
+    else if(px!=null&&t1!=null&&px>=t1) own+=' The first target is reached.';
+    else own+=' Not at the first target yet.';
+    if(px!=null) own+=` It's ${usd(px,2)} now.`;
+    if(sz&&sz.shares!=null) own+=` With ${usd(sz.mine,0)}: ${n(sz.shares, 4)} shares (about ${usd(sz.amount,0)}).`;
+    steps.push(own);
+  }
+  if(stop!=null) steps.push(`${open?'Keep a sell order':'Right after buying, set a sell order'} at ${usd(stop,2)}. If it falls there, sell everything.${lossTxt}`);
+  if(t1!=null) steps.push(`When it reaches ${usd(t1,2)}${pctOf(t1,ent)!=null?' (+'+pctOf(t1,ent)+'%)':''}, sell half.`);
+  steps.push('Then move your safety exit up to your buy price, so the rest cannot lose.');
+  const when=t.time_stop?dshort(t.time_stop):'';
+  if(t2!=null) steps.push(`Sell the rest at ${usd(t2,2)}${pctOf(t2,ent)!=null?' (+'+pctOf(t2,ent)+'%)':''}${when?', or on '+when+' if neither happened':''}.`);
+  const ed=(t.earnings||{}).date;
+  if(ed) steps.push(`The day before earnings on ${dshort(ed)}: if you already sold half, keep the rest and leave the safety exit at your buy price. If you are up 5% or more, sell half and move the safety exit to your buy price. Otherwise sell everything.`);
+  if(sz&&sz.shares!=null&&Math.abs(sz.shares-Math.round(sz.shares))>1e-4) steps.push("If your broker won't let you set a sell order on part shares, watch for the app's alert and sell by hand.");
+  return steps;
+}
+function guideText(t){ return guideSteps(t).map((s,i)=>`${i+1}. ${s}`).join('\n'); }
 function homeView(){
   const b=state.acct||'main', be=bookEq(b), ch=dayChange(b);
   const open=T.filter(t=>t.book===b&&t.status==='OPEN');
@@ -371,24 +458,20 @@ function homeView(){
   const chips=ranges.map(r=>`<button data-range="${r}" class="${(state.range||'ALL')===r?'on':''}">${r}</button>`).join('');
   const sm=dayMove('SPY');
   const spy=(sm.d!=null&&sm.pct!=null)?`<p class="vs" id="hero-spy">vs S&amp;P 500 <b class="num ${cls(sm.d)}" data-chg data-day="SPY">${moneyPct(sm.d, sm.pct)}</b></p>`:'<p class="vs" id="hero-spy"></p>';
+  const cards=pend.map(entryCard).join('');
   return `<section id="overview" data-screen="home">
-    <div class="acctseg seg" role="tablist">${['main','shadow','mambo'].map(x=>`<button data-acct="${x}" class="${x===b?'on':''}" role="tab">${BOOKN[x]}</button>`).join('')}</div>
-    <p class="eyebrow">${b==='shadow'?'Shadow · test book':BOOKN[b]+' paper'}</p>
     <p class="hero-eq num" id="hero-eq" data-eq="${b}">${usd(be.eq,2)}</p>
     <p class="hero-row"><span class="capsule num ${cls(ch.d)}" id="hero-day" data-chg>${ch.d==null||ch.pct==null?susd(ch.d,2):moneyPct(ch.d, ch.pct)}</span> <span class="hero-when" id="hero-when">${esc(ch.label)}</span></p>
-    ${(()=>{const picks=((D.scan||{}).candidates||[]).filter(c=>!c.booked&&!T.some(t=>t.ticker===c.ticker&&(t.status==='OPEN'||t.status==='PENDING'))).slice(0,4);
-  const cards=pend.map(entryCard).join('')+(b==='main'?picks.map(pickCard).join(''):'');
-  return cards?`<h2 class="group-h">Next entries</h2><div class="erow">${cards}</div>`:'';})()}
+    ${cards?`<h2 class="group-h">Next entries</h2><div class="erow">${cards}</div>`:''}
     ${areaChart(b,false)}
     ${chips?`<div class="ranges" role="tablist">${chips}</div>`:''}
     ${spy}
     <p class="fine" id="ledger-stamp"></p>
     <p class="fine" id="hero-live"></p>
     <h2 class="group-h">Open</h2>
-    ${open.length?legendDots():''}
-    <div class="group">${open.length?open.map(t=>posCard(t,false)).join(''):'<div class="empty">No open positions.</div>'}</div>
+    <div class="group">${open.length?open.map(t=>posCard(t,false)).join(''):'<div class="empty"><span class="empty-i" aria-hidden="true"></span>No open positions</div>'}</div>
+    ${b==='main'?watchlistHTML():''}
     ${nx.length?`<h2 class="group-h">Attention</h2><div class="group">${nx.map(x=>`<div class="cell static"><div class="c1"><b>${dshort(x.date)}</b><span class="sub2">${esc(x.label)}</span></div><div class="c3 sub2">${daysTo(x.date)}d</div></div>`).join('')}</div>`:''}
-    <p class="fine">P&amp;L is the exit value, last price minus 0.2% paper slippage. The price is the last trade, the same number everywhere. Tap a change to swap which figure leads. Official fills come only from the scheduled 5-minute bar checks.</p>
   </section>`;
 }
 
@@ -397,9 +480,7 @@ function positionsView(){
   const order={OPEN:0,PENDING:1,CLOSED:2,CANCELLED:3};
   const ts=T.filter(t=>b==='all'||t.book===b).sort((x,y)=>(order[x.status]-order[y.status])||((y.scores||{}).total||0)-((x.scores||{}).total||0));
   return `<section data-screen="positions">
-    <div class="seg">${['main','shadow','mambo','all'].map(x=>`<button data-recs="${x}" class="${x===b?'on':''}">${x==='all'?'All':BOOKN[x]}</button>`).join('')}</div>
-    ${ts.some(t=>t.status==='OPEN'||t.status==='PENDING')?legendDots():''}
-    <div class="group">${ts.map(t=>posCard(t, b==='all')).join('')||'<div class="empty">Nothing in this book.</div>'}</div>
+    <div class="group">${ts.map(t=>posCard(t, b==='all')).join('')||'<div class="empty"><span class="empty-i" aria-hidden="true"></span>Nothing in this book</div>'}</div>
   </section>`;
 }
 
@@ -436,17 +517,6 @@ function levelRow(t, label, val, tone){
   const dist=phrase?`<span class="dist ${cls(label==='Entry'?-(distPair(t,val).d):distPair(t,val).d)}" data-chg data-dist="${t.id}|${val}|${label}">${esc(phrase)}</span>`:'';
   return `<div class="inset-row lvl"><span class="lv-k">${label}</span><span class="inset-v"><b class="num ${tone||''}">${n(val)}</b>${dist}</span></div>`;
 }
-function sizeView(obj){
-  const raw=obj&&obj.size_small;
-  if(!raw||(raw.shares==null&&raw.amount==null&&raw.risk==null)) return null;
-  const base=+raw.account||150;
-  const mine=+localStorage.getItem('sd.acct.size')||150;
-  const k=base?mine/base:1;
-  const sh=raw.shares==null?null:raw.shares*k;
-  const amt=raw.amount==null?null:raw.amount*k;
-  const line=(sh!=null||amt!=null)?`<p class="size150">For ${usd(mine,0)}: ${sh!=null?n(sh,4)+' sh':''}${amt!=null?' · '+usd(amt,0):''}</p>`:'';
-  return {line, risk:raw.risk==null?null:raw.risk*k, t1:raw.t1==null?null:raw.t1*k, t2:raw.t2==null?null:raw.t2*k, mine};
-}
 function detailHTML(t){
   const r=t.reasoning||{}, lv=r.levels||{}, wl=r.why_levels||{};
   const [st]=status(t), pair=pnlPair(t), cf=conf(t);
@@ -466,31 +536,21 @@ function detailHTML(t){
       <div class="inset">
         ${levelRow(t,'Entry',entryRef(t),'')}
         ${levelRow(t,'Stop',lv.stop,'neg')}
-        ${sizeView(t)&&sizeView(t).risk!=null?`<div class="inset-row"><span>Risk at your size</span><b class="num">${usd(sizeView(t).risk,0)}</b></div>`:''}
+        ${sizeView(t)&&sizeView(t).risk!=null?`<div class="inset-row"><span>Risk</span><b class="num">${usd(sizeView(t).risk,0)}</b></div>`:''}
         ${levelRow(t,'T1',lv.t1,'')}
-        ${sizeView(t)&&sizeView(t).t1!=null?`<div class="inset-row"><span>T1 at your size</span><b class="num">${usd(sizeView(t).t1,0)}</b></div>`:''}
+        ${sizeView(t)&&sizeView(t).t1!=null?`<div class="inset-row"><span>At first target</span><b class="num">${usd(sizeView(t).t1,0)}</b></div>`:''}
         ${levelRow(t,'T2',lv.t2,'upv')}
-        ${sizeView(t)&&sizeView(t).t2!=null?`<div class="inset-row"><span>T2 at your size</span><b class="num">${usd(sizeView(t).t2,0)}</b></div>`:''}
+        ${sizeView(t)&&sizeView(t).t2!=null?`<div class="inset-row"><span>At final target</span><b class="num">${usd(sizeView(t).t2,0)}</b></div>`:''}
         <div class="inset-row"><span>Shares</span><b class="num">${n(t.contracts_open??t.contracts,0)}</b></div>
-        <div class="inset-row"><span>Risk</span><b class="num">${usd(t.max_risk_usd)}</b></div>
+        <div class="inset-row"><span>Paper risk</span><b class="num">${usd(t.max_risk_usd)}</b></div>
         <div class="inset-row"><span>R:R</span><b class="num">${rrTxt(t.rr)}</b></div>
         <div class="inset-row"><span>Time stop</span><b>${t.time_stop?dshort(t.time_stop):((t.time_stop_weeks||'n/a')+' wks')}</b></div>
         <div class="inset-row"><span>Earnings</span><b>${earnTxt(t)}</b></div>
         <div class="inset-row"><span>Order</span><b>${esc(orderText(t))}</b></div>
       </div>
-      <div class="prose">
-        <h3>Levels</h3>
-        <p class="levels-now">${esc(levelSentence(t))}</p>
-        ${rebaseNote(t)?`<p class="fine rebase">${esc(rebaseNote(t))}</p>`:''}
-        <p class="fine">Distances are from the last price to that level, in position dollars and percent of price. They use the same levels as the list above.</p>
-        ${r.why_stock?`<h3>Why this stock</h3><p>${esc(r.why_stock)}</p>`:''}
-        ${r.why_now?`<h3>Why now</h3><p>${esc(r.why_now)}</p>`:''}
-        ${wl.entry?`<h3>As issued</h3><p class="fine">${esc(wl.entry)} ${esc(wl.stop||'')} ${esc(wl.t1||'')} ${esc(wl.t2||'')}</p>`:''}
-        ${risks?`<h3>Risks</h3><ul>${risks}</ul>`:''}
-        ${(r.confidence||{}).why?`<h3>Confidence</h3><p>${esc(r.confidence.why)}</p>`:''}
-        ${t.why_not_main_detail?`<h3>Why it is not in Main</h3><p>${esc(t.why_not_main_detail)}</p>`:''}
-        ${t.postmortem?`<h3>After the close</h3><p>${esc(t.postmortem.why||t.postmortem.one_liner||'')}</p>`:''}
-      </div>
+      ${reasonBlock(t)}
+      <button type="button" class="todo" data-todo="${t.id}">What to do</button>
+      ${t.postmortem?`<p class="fine">${esc(t.postmortem.one_liner||t.postmortem.why||'')}</p>`:''}
       <p class="fine">${esc(t.id)} · rec ${esc(t.rec_id||'n/a')} · method v${esc(t.method_version||'')} · issued ${dshort(t.created_at)} ET</p>
       ${newsBlock(t)}${fills?`<h2 class="group-h">Fills</h2><div class="inset">${fills}</div>`:''}
     </div>`;
@@ -511,10 +571,10 @@ function activityView(){
     body=cards+`<div class="group">${fl.map(f=>{
       const bought=f.kind==='entry'||f.side==='buy';
       const k=f.kind==='cancel'?'exit':(f.side==='sell'?'exit':'fill');
-      const who=f.account==='shadow'?'Shadow':'Main';
+      const who=BOOKN[f.account]||f.account||'';
       const title=bought?`${esc(f.ticker)} Bought`:`${esc(f.ticker)} ${esc((f.kind||'').replace('_',' '))}`;
-      return `<div class="tl-item" id="fill-${f.fill_id}">${ico(k)}<div><b>${title}</b><span class="sub2">${dshort(f.filled_at)} · ${who}${who==='Shadow'?' test book':''}</span></div><b class="num">${f.fill_price==null?'':(bought?'$'+n(f.fill_price):n(f.fill_price))}</b></div>`;
-    }).join('')||'<div class="empty">No fills yet.</div>'}</div>`;
+      return `<div class="tl-item" id="fill-${f.fill_id}">${ico(k)}<div><b>${title}</b><span class="sub2">${dshort(f.filled_at)} · ${who}</span></div><b class="num">${f.fill_price==null?'':(bought?'$'+n(f.fill_price):n(f.fill_price))}</b></div>`;
+    }).join('')||'<div class="empty"><span class="empty-i" aria-hidden="true"></span>No fills yet</div>'}</div>`;
   } else if(mode==='alerts'){
     body=`<div class="group">${(D.alerts||[]).slice(0,40).map(a=>{
       const m=String(a.text||'').match(/P&L\s+(-?\d+)\s*->\s*([+-]?\d+)/);
@@ -557,7 +617,6 @@ function perfPanel(){
   const bars=rows.length?`<div class="card"><p class="eyebrow">Open R, not closed trades</p><div class="bars">${rows.map(r=>`<div class="bar-row"><b>${esc(r.ticker)}</b><i style="width:${Math.abs(r.r)/max*100}%;background:${r.r>=0?'var(--up)':'var(--down)'}"></i><span class="num ${cls(r.r)}">${r.pnl==null?'':moneyPct(r.pnl, r.return_on_risk_pct, 0)} · ${n(r.r,2)}R</span></div>`).join('')}</div></div>`:'<div class="empty">No open R yet.</div>';
   const wr=a.closed? (a.win_rate==null?'n/a':n(a.win_rate,0)+'%') : null;
   return `<section>
-    <div class="seg">${['main','shadow','mambo'].map(x=>`<button data-acct="${x}" class="${x===b?'on':''}">${BOOKN[x]}</button>`).join('')}</div>
     <p class="hero-eq num">${usd(be.eq,2)}</p>
     <p class="capsule ${cls(ch.d)}" data-chg>${moneyPct(ch.d, ch.pct)}</p>
     <div class="card">${areaChart(b,true)}</div>
@@ -572,7 +631,6 @@ function perfPanel(){
       <div class="inset-row"><span>Max drawdown</span><b class="num">${a.max_drawdown_pct==null?'n/a':n(a.max_drawdown_pct,2)+'%'}</b></div>
     </div>
     ${bars}
-    <p class="fine" id="slip-note">Unrealized P&amp;L uses the exit value (last price minus 0.2% paper slippage). Since-start versus the S&amp;P is the ledger percent only. Today versus the S&amp;P, in dollars and percent, is on Home.</p>
   </section>`;
 }
 function learnPanel(){
@@ -636,6 +694,11 @@ function settingsView(){
     <div class="inset" id="diag">
       ${[['Feed',d.state],['Socket',d.socket],['Symbols',d.symbols+' (subscribed '+d.subs+')'],['Messages',String(d.msgs)],['Last message',hm(d.lastMsg)],['Last trade',hm(d.lastTrade)],['Last quote poll',hm(d.lastPoll)],['Last error',d.err||'none']].map(([k,v])=>`<div class="inset-row"><span>${k}</span><b class="num">${esc(v)}</b></div>`).join('')}
     </div>
+        <h2 class="group-h">About</h2>
+    <div class="inset">
+      <div class="inset-row"><span>Paper only, not advice. Exit value is the last price minus 0.2% slippage. Official fills come from the 5-minute checks. The chart's dashed line is the account's start. Today versus the S&amp;P is on Home. Since-start versus the S&amp;P is here.</span></div>
+      ${Object.entries(D.glossary||{}).map(([k,v])=>`<div class="inset-row"><span><b>${esc(k)}</b><span class="sub2">${esc(v)}</span></span></div>`).join('')}
+    </div>
     <h2 class="group-h">App</h2>
     <div class="group padg">
       <p id="install-state" class="fine"></p>
@@ -646,15 +709,104 @@ function settingsView(){
   </section>`;
 }
 
-function screen(){
-  const tab=state.tab||'home';
-  if(tab==='home') return homeView();
-  if(tab==='positions') return positionsView();
-  if(tab==='activity') return activityView();
-  if(tab==='insights') return insightsView();
-  return settingsView();
+
+const LEGACY_IDS=new Set(['C20261007-003','C20261007-004','C20261007-005','C20261007-006']);
+function onFeed(t){
+  if(!t||(t.book!=='main')) return false;
+  if(t.status!=='OPEN'&&t.status!=='PENDING') return false;
+  if(t.legacy_pre_autonomy||t.selected_by==='legacy_pre_autonomy'||t.book==='legacy_main') return false;
+  const ids=new Set(LEGACY_IDS);
+  (((D.compare||{}).legacy_main||{}).trade_ids||[]).forEach(id=>ids.add(id));
+  if(ids.has(t.id)) return false;
+  return true;
 }
-const TITLES={home:'Swing Desk',positions:'Positions',activity:'Activity',insights:'Insights',settings:'Settings'};
+function actionDist(t){
+  const px=Val.last(t.ticker), lv=(t.reasoning||{}).levels||{};
+  const levels=[lv.stop,lv.t1,lv.t2].filter(v=>v!=null);
+  if(px==null||!px||!levels.length) return 9;
+  return Math.min(...levels.map(v=>Math.abs(v/px-1)));
+}
+function miniPnl(t){
+  const sz=sizeView(t), ent=entryRef(t), px=Val.exit(t.ticker);
+  if(!sz||sz.shares==null||!sz.shares||ent==null||px==null) return null;
+  const d=sz.shares*(px-ent), base=sz.shares*ent;
+  const pc=base?d/base*100:null;
+  return {text:moneyPct(d, pc), cls:cls(d)};
+}
+function potentialLine(t){
+  const sz=sizeView(t), lv=(t.reasoning||{}).levels||{}, ent=trigPx(t);
+  if(ent==null) return '';
+  const t1=lv.t1, stop=lv.stop;
+  const gPct=t1!=null?(t1/ent-1)*100:null;
+  const rPct=stop!=null?(stop/ent-1)*100:null;
+  const gain=sz&&sz.t1!=null?sz.t1:null;
+  const risk=sz&&sz.risk!=null?sz.risk:null;
+  const g=gain!=null?susd(gain,0):'';
+  const r=risk!=null?susd(-Math.abs(risk),0):'';
+  if(!g&&gPct==null) return '';
+  return `Potential: ${g} (${gPct==null?'':pct(gPct)}) / risk ${r} (${rPct==null?'':pct(rPct)})`;
+}
+function feedCard(t){
+  const lv=(t.reasoning||{}).levels||{};
+  const open=t.status==='OPEN';
+  const sz=sizeView(t);
+  const sh=sz&&sz.shares!=null?n(sz.shares,4)+' shares at ':'';
+  const ent=open?entryRef(t):trigPx(t);
+  const when=t.opened_at||t.created_at;
+  const enter=open
+    ? `Bought ${sh}${usd(ent,2)} · ${dshort(when)}`
+    : `Buy ${sh}${usd(ent,2)}`;
+  const aw=awayPair(t);
+  const until=(t.entry_order||{}).valid_until;
+  const wait=!open&&aw?`<p class="tstate" data-wait="${t.id}">Waiting · ${susd(aw.d,2)} (${n(Math.abs(aw.pct),1)}%) away${until?' · until '+dshort(until):''}</p>`:'';
+  const exit1=`Take half at ${usd(lv.t1,2)} · rest at ${usd(lv.t2,2)}`;
+  const exit2=`Sell all if it drops to ${usd(lv.stop,2)}${t.time_stop?' · or by '+dshort(t.time_stop):''}`;
+  const profit=open
+    ? (()=>{const line=miniPnl(t); return line?`<p class="tprofit num ${line.cls}" data-mini="${t.id}">${line.text}</p>`:'';})()
+    : `<p class="tprofit quiet">${esc(potentialLine(t))}</p>`;
+  const steps=guideSteps(t).map(x=>`<li>${esc(x)}</li>`).join('');
+  const openAttr=state.feedOpen===t.id?'':'hidden';
+  return `<article class="tcard">
+    <button type="button" class="hit" data-card="${t.id}">
+      <b class="tk">${esc(t.ticker)}</b>
+      <span class="co">${esc(t.name||'')}</span>
+      <p class="tenter">${esc(enter)}</p>
+      ${wait}
+      <p class="texit">${esc(exit1)}</p>
+      <p class="texit sub">${esc(exit2)}</p>
+      ${profit}
+    </button>
+    <div class="steps" ${openAttr}>
+      <ol class="guide">${steps}</ol>
+      <button type="button" class="todo" data-copy="${t.id}">Copy</button>
+    </div>
+  </article>`;
+}
+function missionHTML(){
+  const m=D.mission||{};
+  const start=m.start!=null?m.start:150, goal=m.goal!=null?m.goal:100000;
+  let prog=m.progress_pct!=null?+m.progress_pct:(m.progress!=null?+m.progress:0);
+  if(prog>0&&prog<=1) prog*=100;
+  prog=Math.max(0, Math.min(100, prog||0));
+  const eqv=m.current_equity!=null?m.current_equity:m.equity;
+  const eq=eqv!=null?` · ${usd(eqv,2)}`:'';
+  return `<button type="button" id="mission" class="mission"><b class="num">${usd(start,0)} → ${usd(goal,0)}${eq}</b><span class="mbar" aria-hidden="true"><i style="width:${prog.toFixed(2)}%"></i></span></button>`;
+}
+function feedView(){
+  const rows=T.filter(onFeed);
+  const open=rows.filter(t=>t.status==='OPEN').sort((a,b)=>actionDist(a)-actionDist(b));
+  const pend=rows.filter(t=>t.status==='PENDING').sort((a,b)=>{
+    const da=awayPair(a), db=awayPair(b);
+    return Math.abs((da&&da.pct)||99)-Math.abs((db&&db.pct)||99);
+  });
+  const mine=+localStorage.getItem('sd.acct.size')||150;
+  const body=rows.length
+    ? `${open.map(feedCard).join('')}${open.length&&pend.length?'<p class="nextlab">Next</p>':''}${pend.map(feedCard).join('')}<p class="for150">For ${usd(mine,0)}</p>`
+    : `<p class="empty-feed">No trade yet. Next scan 8:46 AM.</p>`;
+  return `<section data-screen="feed">${missionHTML()}${body}</section>`;
+}
+function screen(){ return feedView(); }
+const TITLES={home:'Home',positions:'Positions',activity:'Activity',insights:'Insights',settings:'Settings'};
 
 /* One price store. Every surface reads Prices.get(symbol). Nothing else may
    read data.json quotes or invent a price. src is trade | quote | ledger. */
@@ -867,7 +1019,7 @@ const UI = {
     }
     const nav=this.navState(), m=$('#mkt'), mt=$('#mkt-t');
     if(m){ m.classList.remove('live','ah','closed'); m.classList.add(nav.c); m.title=nav.title }
-    if(mt) mt.textContent=nav.label+(nav.hm?' '+nav.hm:'');
+    if(mt) mt.textContent=nav.hm||'';
   },
   applyLive(){
     if(!D)return;
@@ -879,6 +1031,8 @@ const UI = {
     $$('[data-day]').forEach(el=>{ const mv=dayMove(el.dataset.day); if(mv.d==null||mv.pct==null)return; el.textContent=moneyPct(mv.d, mv.pct); el.classList.remove('pos','neg','mute'); el.classList.add(cls(mv.d)) });
     $$('[data-dist]').forEach(el=>{ const parts=el.dataset.dist.split('|'); const t=T.find(x=>x.id===parts[0]); if(!t)return; const phrase=distPhrase(t, parts[2]||'', +parts[1]); if(!phrase)return; el.textContent=phrase; const pair=distPair(t,+parts[1]); const signed=parts[2]==='Entry'?-pair.d:pair.d; el.classList.remove('pos','neg','mute'); el.classList.add(cls(signed)) });
     $$('[data-away]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.away); if(!t)return; const aw=awayPair(t); if(!aw)return; el.textContent=moneyPct(aw.d, aw.pct)+' away'; el.classList.remove('pos','neg','mute'); el.classList.add(cls(aw.d)) });
+    $$('[data-wait]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.wait); if(!t)return; const aw=awayPair(t); if(!aw)return; const until=(t.entry_order||{}).valid_until; el.textContent='Waiting · '+susd(aw.d,2)+' ('+n(Math.abs(aw.pct),1)+'%) away'+(until?' · until '+dshort(until):''); });
+    $$('[data-mini]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.mini); if(!t||t.status!=='OPEN')return; const line=miniPnl(t); if(!line)return; el.textContent=line.text; el.classList.remove('pos','neg','mute'); el.classList.add(line.cls); });
     const bn=$('#bell-n'); if(bn){ const n=T.filter(t=>rowAlert(t)).length; bn.hidden=!n; bn.textContent=String(n); }
     $$('[data-dot]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.dot); const tr=el.closest('[data-track]'); if(!t||!tr)return; const px=Val.last(t.ticker); if(px==null)return;
       const s=+tr.dataset.stop, t2=+tr.dataset.t2; if(t2===s)return; el.style.left=Math.max(0,Math.min(100,(px-s)/(t2-s)*100))+'%' });
@@ -1112,21 +1266,61 @@ function paintKeyState(){
 
 state.tab=qs.get('tab')||'home'; state.ins='perf'; state.act='fills'; state.emph=localStorage.getItem('sd.emph')||'usd'; state.range=localStorage.getItem('sd.range')||'ALL';
 const scrollMem={};
-function render(){
-  $('#app').innerHTML=screen();
-  const name=TITLES[state.tab]||'Swing Desk';
+const tabPanels=new Map();
+let tabGen=0;
+function bustTabs(){ tabGen++; tabPanels.clear(); }
+window.__bustTabs=bustTabs;
+
+function openGear(){
+  const th=localStorage.getItem('sd.theme')||'system';
+  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><h2 class="sheet-title">Settings</h2><label class="lbl" for="acct-size">Account size</label><div class="keyrow"><input id="acct-size" inputmode="decimal" value="${esc(localStorage.getItem('sd.acct.size')||'150')}"></div><p class="lbl">Theme</p><div class="seg">${[['system','System'],['light','Light'],['dark','Dark']].map(([k,l])=>`<button type="button" data-theme-set="${k}" class="${th===k?'on':''}">${l}</button>`).join('')}</div><label class="lbl" for="key-in">Price key</label><div class="keyrow"><input id="key-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Finnhub key"><button type="button" id="key-show" class="btn">Show</button></div><div class="keyrow"><button type="button" id="key-test-btn" class="btn">Test</button><button type="button" id="key-save" class="btn primary">Save</button></div><button type="button" id="key-remove" class="btn danger">Remove key</button><p id="key-test" class="fine" role="status"></p><p id="key-state" class="fine"></p><button type="button" class="btn" id="sw-check">Check for update</button></div>`);
+  wireSettings();
+}
+let gearTimer=0, gearHeld=false, gearTaps=[];
+function paintAcct(){
+  const tab=state.tab||'home';
+  const el=$('#acct-switch'), line=$('#bookline'), book=$('#title-book');
+  const show=tab==='home'||tab==='positions'||tab==='insights';
+  if(el){
+    el.hidden=!show;
+    if(show){
+      const opts=tab==='positions'?[['main','Main'],['shadow','Practice'],['mambo','Mine'],['all','All']]:[['main','Main'],['shadow','Practice'],['mambo','Mine']];
+      const cur=tab==='positions'?(state.recs||'main'):(state.acct||'main');
+      el.innerHTML=opts.map(([k,l])=>`<button type="button" data-book="${k}" class="${cur===k?'on':''}" role="tab">${l}</button>`).join('');
+    }
+  }
+  const key=tab==='positions'?(state.recs||'main'):(state.acct||'main');
+  if(line){ line.hidden=!show||!BOOKLINE[key]; line.textContent=BOOKLINE[key]||''; }
+  if(book) book.textContent=BOOKN[key]||'';
+  const tk=$('#ticker'); if(tk) tk.hidden=tab!=='positions';
+}
+function render(bust){
+  const tab=state.tab||'home';
+  document.body.dataset.tab=tab;
+  if(bust){ const old=tabPanels.get(tab); if(old) old.remove(); tabPanels.delete(tab); }
+  let node=tabPanels.get(tab);
+  if(!node || node.dataset.gen!==String(tabGen)){
+    node=document.createElement('div');
+    node.className='tabpanel';
+    node.dataset.gen=String(tabGen);
+    node.innerHTML=screen();
+    tabPanels.set(tab, node);
+    bindChart(node);
+  }
+  const app=$('#app');
+  if(app.firstElementChild!==node) app.replaceChildren(node);
+  const name=TITLES[tab]||'Home';
   const title=$('#title'); if(title) title.textContent=name;
-  const c=$('#title-compact'); if(c) c.textContent=name;
-  $$('#tabs [data-tab]').forEach(b=>b.classList.toggle('on', b.dataset.tab===state.tab && !b.classList.contains('feed')));
+  $$('#tabs [data-tab]').forEach(b=>b.classList.toggle('on', b.dataset.tab===tab && !b.classList.contains('feed')));
+  paintAcct();
   paintKeyState();
-  bindChart($('#app'));
   UI.applyLive();
-  if(state.tab==='settings') wireSettings();
+  if(tab==='settings') wireSettings();
 }
 function gotoTab(tab){
   if(!TITLES[tab]) return;
   if(tab===state.tab){ scrollTo({top:0, behavior: STATIC?'auto':'smooth'}); return }
-  scrollMem[state.tab]=scrollY; state.tab=tab; render(); scrollTo(0, scrollMem[tab]||0); UI.haptic(8);
+  scrollMem[state.tab]=scrollY; state.tab=tab; render(false); scrollTo(0, scrollMem[tab]||0); UI.haptic(8);
   if(!STATIC){ const app=$('#app'); app.style.willChange='transform, opacity';
     const anim=app.animate([{opacity:0,transform:'translate3d(0,8px,0)'},{opacity:1,transform:'translate3d(0,0,0)'}],{duration:220,easing:'cubic-bezier(.2,.8,.2,1)'});
     anim.finished.then(()=>{ app.style.willChange='auto'; }).catch(()=>{}); }
@@ -1138,7 +1332,7 @@ function wireSettings(){
   $('#key-save').onclick=async()=>{ const k=inp.value.trim(); const o=$('#key-test'); if(!k){o.textContent='Paste a key first.';return} o.textContent='Testing…'; const r=await Live.test(k); if(!r.ok){o.textContent=r.err+' Not saved.';return} Live.setKey(k); inp.value=''; await Live.start(); paintKeyState(); UI.applyLive(); o.textContent='Saved on this device. SPY '+n(r.px)+'.' };
   $('#key-remove').onclick=()=>{ Live.setKey(''); Live.stop(true); Live.state='nokey'; Live.err=''; Prices.seed(D); paintKeyState(); UI.applyLive(); $('#key-test').textContent='Key removed from this device.' };
   const sw=$('#sw-check'); if(sw) sw.onclick=()=>{ SW.check(); UI.toast('Checking for an update') };
-  const az=$('#acct-size'); if(az) az.onchange=()=>{ const v=Math.max(1, +az.value||150); localStorage.setItem('sd.acct.size', String(v)); az.value=String(v); render(); };
+  const az=$('#acct-size'); if(az) az.onchange=()=>{ const v=Math.max(1, +az.value||150); localStorage.setItem('sd.acct.size', String(v)); az.value=String(v); bustTabs(); render(true); };
 }
 const Net={ok:true};
 async function loadData(){
@@ -1182,19 +1376,27 @@ addEventListener('touchend', ()=>{
 });
 addEventListener('scroll', ()=>{ document.body.classList.toggle('scrolled', scrollY>12) }, {passive:true});
 document.addEventListener('click', e=>{
+  if(e.target.closest('#mission')){
+    if(gearHeld){ gearHeld=false; return }
+    const now=Date.now(); gearTaps=gearTaps.filter(t=>now-t<1800); gearTaps.push(now);
+    if(gearTaps.length>=5){ gearTaps=[]; openGear(); }
+    return;
+  }
+  const cp=e.target.closest('[data-copy]'); if(cp){ const t=T.find(x=>x.id===cp.dataset.copy); if(!t) return; const text=guideText(t); const done=()=>UI.toast('Copied'); if(navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(done); else done(); return }
+  const card=e.target.closest('[data-card]'); if(card){ state.feedOpen=state.feedOpen===card.dataset.card?null:card.dataset.card; render(true); return }
   if(e.target.closest('#feed-dismiss')){ localStorage.setItem('sd.feed.dismissed','1'); UI.applyLive(); return }
-  const cap=e.target.closest('[data-cap]'); if(cap){ state.emph=state.emph==='pct'?'usd':'pct'; localStorage.setItem('sd.emph', state.emph); render(); return }
-  const rg=e.target.closest('[data-range]'); if(rg){ state.range=rg.dataset.range; localStorage.setItem('sd.range', state.range); render(); return }
+  const cap=e.target.closest('[data-cap]'); if(cap){ state.emph=state.emph==='pct'?'usd':'pct'; localStorage.setItem('sd.emph', state.emph); render(true); return }
+  const rg=e.target.closest('[data-range]'); if(rg){ state.range=rg.dataset.range; localStorage.setItem('sd.range', state.range); render(true); return }
   if(e.target.closest('#bell')){ Sheet.alerts(); return }
   const pk=e.target.closest('[data-pick]'); if(pk){ const c=((D.scan||{}).candidates||[]).find(x=>x.ticker===pk.dataset.pick); if(!c) return;
     const sz=sizeView(c);
-    Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">Scan pick</p><h2 class="sheet-title">${esc(c.ticker)}</h2><p class="co">${esc(c.name||'')} · ${esc(SETUPN[c.setup]||'')}</p>${sz?sz.line:''}<div class="inset"><div class="inset-row"><span>Entry</span><b class="num">${c.entry!=null?'$'+n(c.entry):'n/a'}</b></div>${c.stop!=null?`<div class="inset-row"><span>Stop</span><b class="num">$${n(c.stop)}</b></div>`:''}${sz&&sz.risk!=null?`<div class="inset-row"><span>Risk at your size</span><b class="num">${usd(sz.risk,0)}</b></div>`:''}</div><div class="prose">${c.pattern?`<p>${esc(c.pattern)}</p>`:''}</div></div>`); return }
-  const tab=e.target.closest('[data-tab]'); if(tab){ gotoTab(tab.dataset.tab); return }
-  const th=e.target.closest('[data-theme-set]'); if(th){ localStorage.setItem('sd.theme', th.dataset.themeSet); Theme.apply(); render(); return }
-  const ac=e.target.closest('[data-acct]'); if(ac){ state.acct=ac.dataset.acct; render(); return }
-  const rc=e.target.closest('[data-recs]'); if(rc){ state.recs=rc.dataset.recs; render(); return }
-  const act=e.target.closest('[data-act]'); if(act){ state.act=act.dataset.act; render(); return }
-  const ins=e.target.closest('[data-ins]'); if(ins){ state.ins=ins.dataset.ins; render(); return }
+    Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">Watchlist · not an order</p><h2 class="sheet-title">${esc(c.ticker)}</h2><p class="co">${esc(c.name||'')} · ${esc(SETUPN[c.setup]||'')}</p>${sz?sz.line:''}<div class="inset"><div class="inset-row"><span>Entry</span><b class="num">${c.entry!=null?'$'+n(c.entry):'n/a'}</b></div>${c.stop!=null?`<div class="inset-row"><span>Stop</span><b class="num">$${n(c.stop)}</b></div>`:''}${sz&&sz.risk!=null?`<div class="inset-row"><span>Risk at your size</span><b class="num">${usd(sz.risk,0)}</b></div>`:''}</div><div class="prose">${c.pattern?`<p>${esc(c.pattern)}</p>`:''}</div></div>`); return }
+  const tab=e.target.closest('#tabs [data-tab]'); if(tab){ gotoTab(tab.dataset.tab); return }
+  const th=e.target.closest('[data-theme-set]'); if(th){ localStorage.setItem('sd.theme', th.dataset.themeSet); Theme.apply(); render(true); return }
+  const bk=e.target.closest('[data-book]'); if(bk){ const k=bk.dataset.book; if(state.tab==='positions') state.recs=k; if(k!=='all') state.acct=k; bustTabs(); render(false); return }
+  const act=e.target.closest('[data-act]'); if(act){ state.act=act.dataset.act; render(true); return }
+  const ins=e.target.closest('[data-ins]'); if(ins){ state.ins=ins.dataset.ins; render(true); return }
+  const todo=e.target.closest('[data-todo]'); if(todo){ const t=T.find(x=>x.id===todo.dataset.todo); if(!t) return; const text=guideText(t); Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">${esc(t.ticker)}</p><h2 class="sheet-title">What to do</h2><ol class="guide">${guideSteps(t).map(step=>`<li>${esc(step)}</li>`).join('')}</ol><button type="button" class="btn primary" id="copy-guide">Copy</button></div>`); const btn=$('#copy-guide'); if(btn) btn.onclick=()=>{ const done=()=>UI.toast('Copied'); if(navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(done); else done(); }; return }
   const tr=e.target.closest('[data-trade]'); if(tr){ if(held){held=false;return} Sheet.trade(tr.dataset.trade); return }
   const jp=e.target.closest('[data-jump]'); if(jp){ const t=T.find(x=>(x.status==='OPEN'||x.status==='PENDING')&&x.ticker===jp.dataset.jump); if(t) Sheet.trade(t.id); return }
   if(e.target.closest('[data-install]')){ Install.go(); return }
@@ -1203,6 +1405,7 @@ document.addEventListener('click', e=>{
 });
 let hold, held=false;
 document.addEventListener('pointerdown', e=>{
+  if(e.target.closest('#mission')){ gearHeld=false; clearTimeout(gearTimer); gearTimer=setTimeout(()=>{ gearHeld=true; openGear(); }, 550); }
   const tr=e.target.closest('[data-trade]'); if(!tr) return;
   hold=setTimeout(()=>{ held=true; UI.haptic(18); const t=T.find(x=>x.id===tr.dataset.trade); if(!t)return;
     Sheet.open(`<div class="sheet-h"><div class="grab"></div><button class="x" data-close>Close</button></div><div class="sheet-body"><h2>${esc(t.ticker)}</h2><button class="btn" id="act-open">View position</button><button class="btn" id="act-copy">Copy ticker</button></div>`);

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta name="color-scheme" content="dark light">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -19,19 +19,23 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="data.json" as="fetch" crossorigin>
-<link rel="stylesheet" href="app.css?v=2f7c3ff2e6">
+<link rel="stylesheet" href="app.css?v=96f9581b82">
 </head>
 <body>
+<script>document.addEventListener("gesturestart",function(e){e.preventDefault()},{passive:false});document.addEventListener("gesturechange",function(e){e.preventDefault()},{passive:false});document.addEventListener("touchmove",function(e){if(e.touches&&e.touches.length>1)e.preventDefault()},{passive:false});document.addEventListener("dblclick",function(e){e.preventDefault()});</script>
 <a class="skip" href="#app">Skip to content</a>
-<header class="top glass" id="top">
+<header class="top" id="top">
   <div class="bar">
-    <b id="title-compact" class="compact-title">Swing Desk</b>
+    <h1 id="title">Home</h1>
+    <span id="title-book" class="title-book"></span>
+    <span class="bar-sp"></span>
     <button type="button" id="bell" class="bell" aria-label="Alerts"><svg viewBox="0 0 24 24"><path d="M6 16V10a6 6 0 1 1 12 0v6l1.5 2h-15z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><b id="bell-n" hidden>0</b></button>
-    <span id="mkt" class="nav-status" title=""><i class="dot"></i><span id="mkt-t">Closed</span></span>
+    <span id="mkt" class="nav-status" title=""><i class="dot"></i><span id="mkt-t" class="vh">Closed</span></span>
   </div>
+  <div id="acct-switch" class="pills" role="tablist"></div>
+  <p id="bookline" class="bookline"></p>
 </header>
-<h1 id="title" class="largetitle">Swing Desk</h1>
-<div id="ticker" class="ticker" aria-label="Prices"></div>
+<div id="ticker" class="ticker" aria-label="Prices" hidden></div>
 <div id="pull" aria-hidden="true"><span>Pull to refresh</span></div>
 <div id="offline" class="note" hidden>Offline. Showing the last saved ledger.</div>
 <div id="install-banner" class="install-banner glass" hidden>
@@ -62,6 +66,6 @@
 <div id="toast" class="toast glass" hidden role="status"></div>
 <noscript><p class="empty">Swing Desk needs JavaScript.</p></noscript>
 
-<script src="app.js?v=2f7c3ff2e6" defer></script>
+<script src="app.js?v=96f9581b82" defer></script>
 </body>
 </html>
