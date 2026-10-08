@@ -1,6 +1,6 @@
 /* Swing Desk service worker. Shell: cache-first (instant/offline). data.json: network-first, cached copy offline.
    VERSION changes only when the app shell changes, which triggers the in-app "Update available" prompt. */
-const VERSION = '86e55decd0';
+const VERSION = '465d59dd9e';
 const SHELL = 'sd-shell-' + VERSION;
 const DATA = 'sd-data';
 const ASSETS = ["./", "index.html", "app.css", "app.js", "manifest.webmanifest", "fonts/geist.woff2", "fonts/geistmono.woff2", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-192.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png", "icons/favicon-32.png"];
@@ -29,7 +29,8 @@ self.addEventListener('fetch', e => {
         return res;
       } catch (err) {
         const hit = await caches.match(new URL('data.json', self.registration.scope).href, { cacheName: DATA });
-        return hit || new Response(JSON.stringify({ error: 'offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        if (hit) { const h = new Headers(hit.headers); h.set('X-SD-Offline', '1'); return new Response(await hit.blob(), { status: 200, headers: h }); }
+        return new Response(JSON.stringify({ error: 'offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
       }
     })());
     return;

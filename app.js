@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='86e55decd0';
+const APP_VERSION='465d59dd9e';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -535,7 +535,7 @@ const Net={ok:true,checked:0};
 async function loadData(){
   if(location.protocol==='file:'){UI.stamp();return}
   try{const r=await fetch('data.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();
-    Net.ok=true;Net.checked=Date.now();const first=!D,changed=first||d.generated_at!==D.generated_at;
+    Net.ok=r.headers.get('X-SD-Offline')!=='1';Net.checked=Date.now();const first=!D,changed=first||d.generated_at!==D.generated_at;
     if(changed){setData(d);render();if(!first&&rendered)UI.toast(`New ledger data (written ${esc(String(d.generated_at).slice(11,16))} ET)`,null,null,6000);
       if(first&&Live.key())Live.start();else Live.resubscribe()}
   }catch(e){Net.ok=false;if(!D)$('#app').innerHTML=`<div class="card empty" style="margin-top:40px">Could not load the ledger (data.json): ${esc(e.message)}. ${navigator.onLine?'Retrying every minute.':'You are offline.'}</div>`}
