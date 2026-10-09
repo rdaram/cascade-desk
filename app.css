@@ -444,3 +444,12 @@ html[data-theme=light] .rt.avoid{color:#9b0018;background:#fdecea}
 .chart-plan{margin:0;padding:0 14px 4px}
 .plan-h{margin-top:16px}
 .plan-set{margin-top:8px}
+
+.hero-sub{display:block;margin-top:4px;font:500 15px/1.2 -apple-system,system-ui;color:var(--label2);font-variant-numeric:tabular-nums}
+.hero-sub .pos{color:var(--up)}.hero-sub .neg{color:var(--down)}
+.tag.aira{background:rgba(191,90,242,.16);color:#bf5af2}
+html[data-theme=light] .tag.aira{color:#8e2fc2;background:#f4e8fb}
+.sheet-title .tag.aira{font-size:13px;align-self:center}
+.oldrules{margin:0;padding:4px 14px 14px;font-size:12px;color:var(--label3)}
+.pk-top{flex-wrap:wrap;row-gap:6px}
+.pk-top .state{max-width:100%}

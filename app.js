@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='7badcb8704';
+const APP_VERSION='b0e74f019f';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -756,8 +756,8 @@ function potentialLine(t){
   const t1=lv.t1, stop=lv.stop;
   const gPct=t1!=null?(t1/ent-1)*100:null;
   const rPct=stop!=null?(stop/ent-1)*100:null;
-  const gain=sz&&sz.t1!=null?sz.t1:null;
-  const risk=sz&&sz.risk!=null?sz.risk:null;
+  const gain=sz&&sz.t1!=null?sz.t1:(sz&&sz.shares!=null&&t1!=null?sz.shares*(t1-ent):null);
+  const risk=sz&&sz.risk!=null?sz.risk:(sz&&sz.shares!=null&&stop!=null?sz.shares*(ent-stop):null);
   const g=gain!=null?susd(gain,0):'';
   const r=risk!=null?susd(-Math.abs(risk),0):'';
   if(!g&&gPct==null) return '';
@@ -781,7 +781,7 @@ function fromWatch(w){
   return {id:'w-'+w.ticker, ticker:w.ticker, name:w.name, status:'PENDING', watch:true, wait:w.wait, book:'main', levels_label:w.levels_label,
     size_small:w.size_small, reasoning:{levels:lv},
     entry_order:{kind:o.kind, trigger:o.trigger||lv.entry, zone:o.zone},
-    earnings:w.earnings_date?{date:w.earnings_date}:{}, time_stop_weeks:w.hold_weeks};
+    earnings:w.earnings_date?{date:w.earnings_date}:{}, time_stop_weeks:w.hold_weeks, time_stop_days:w.hold_days};
 }
 function feedCard(t, i){
   const lv=(t.reasoning||{}).levels||{};
@@ -798,7 +798,7 @@ function feedCard(t, i){
     if(aw) waitLine=`Waiting · ${susd(aw.d,2)} (${n(Math.abs(aw.pct),1)}%) away${until?' · until '+dshort(until):''}`;
   }
   const exit1=`Take half at ${usd(lv.t1,2)} · rest at ${usd(lv.t2,2)}`;
-  const bye=t.time_stop?`or by ${dshort(t.time_stop)}`:(t.time_stop_weeks?`Within ${t.time_stop_weeks} weeks`:'');
+  const bye=t.time_stop?`or by ${dshort(t.time_stop)}`:(t.time_stop_weeks?`Within ${t.time_stop_weeks} weeks`:(t.time_stop_days?`Within ${t.time_stop_days} trading days`:''));
   const exit2=`Sell all if it drops to ${usd(lv.stop,2)}`;
   const line=open?miniPnl(t):null;
   const profit=open
@@ -832,7 +832,7 @@ function missionHTML(){
   prog=Math.max(0, Math.min(100, prog||0));
   const eqv=m.current_equity!=null?m.current_equity:m.equity;
   const eq=eqv!=null?usd(eqv,2):usd(m.start!=null?m.start:150,2);
-  return `<button type="button" id="mission" class="mission"><b class="hero-eq num">${eq}</b><span class="goal">Goal ${usd(goal,0)}</span><span class="mbar" style="--p:${prog.toFixed(2)}%" aria-hidden="true"><i></i></span></button>`;
+  return `<button type="button" id="mission" class="mission"><b class="hero-eq num">${eq}</b><span class="goal">Goal ${usd(goal,0)}</span>${heroSubHTML()}<span class="mbar" style="--p:${prog.toFixed(2)}%" aria-hidden="true"><i></i></span></button>`;
 }
 function streamSymbols(){
   const seen=new Set(), out=[];
@@ -929,9 +929,7 @@ function chartInner(){
   const pk=(((D.v3||{}).daily_picks)||[]).find(p=>p.ticker===which);
   const w=(wl&&fromWatch(wl)) || T.find(t=>t.ticker===which&&onFeed(t)) || (pk&&fromPick(pk));
   if(!w||!(TECH[which]||{}).candles) return '<p class="chart-note">No daily bars yet</p>';
-  const lbl=wl?planShort(wl.levels_label,'v2.2'):(pk&&!T.find(t=>t.ticker===which&&onFeed(t)))?planShort(pk.levels_label,'v3'):'Main plan';
-  const more=levelSets(which).length>1?' · other plans in the sheet':'';
-  return `<p class="plan chart-plan">${esc(lbl+more)}</p>`+candleChart(w, true);
+  return `<p class="plan chart-plan">Main plan</p>`+candleChart(w, true);
 }
 function chartPanel(i){
   const which=state.chart||'account';
@@ -958,7 +956,9 @@ function historyPanel(i){
     const buy=entryRef(t), sell=(t.exit||{}).spot;
     return `<div class="hrow ${cls(d)}"><div><b>${esc(t.ticker)}</b><span class="nm">${esc(dshort(t.opened_at||t.created_at))}${t.closed_at?' – '+esc(dshort(t.closed_at)):''}</span></div><span class="num">${usd(buy,2)} → ${sell==null?'—':usd(sell,2)}</span><span class="cap num ${cls(d)}">${d==null?'':moneyPct(d, pair.pct)}</span>${why?`<p class="why">${esc(why)}</p>`:''}</div>`;
   }).join(''):`<div class="empty-row"><span class="empty-mark sm" aria-hidden="true"></span><p>No closed trades yet</p></div>`;
-  return panel('history','history','History',chip,body,i);
+  const ob=((D.books||{}).practice_v22);
+  const old=ob?`<p class="oldrules">Old rules: ${usd(+ob.equity,2)} · ${+ob.closed||0} trade${(+ob.closed||0)===1?'':'s'}</p>`:'';
+  return panel('history','history','History',chip,body+old,i);
 }
 function paintChart(){
   const box=$('#chart-body'); if(!box) return;
@@ -984,7 +984,7 @@ function feedView(){
   const top=any
     ? cards+next+`<p class="for150">For ${usd(mine,0)}</p>`
     : `<div class="empty-hero"><span class="empty-mark" aria-hidden="true"></span><p>No trade yet</p><p>Next scan 8:46 AM</p></div>`;
-  const panels=scoreboardHTML()+picksPanel(i)+pricesPanel(i+1)+chartPanel(i+2)+upcomingPanel(i+3)+historyPanel(i+4)+ripplePanel(i+5);
+  const panels=picksPanel(i)+pricesPanel(i+1)+chartPanel(i+2)+upcomingPanel(i+3)+historyPanel(i+4)+ripplePanel(i+5);
   return `<section data-screen="feed">${missionHTML()}${top}${panels}</section>`;
 }
 function screen(){ return feedView(); }
@@ -1010,18 +1010,17 @@ function paintRegime(){
   if(r){ el.textContent = 'Market: ' + r.w; el.className = 'regime-chip ' + r.c; }
 }
 function bookOf(key){ return ((D && D.books) || {})[key] || null; }
-function scoreboardHTML(){
-  const cols = [['main','System'],['aira','Aira'],['practice_v3','New engine']].map(([k,label])=>[k,label,bookOf(k)]).filter(x=>x[2]);
-  if(cols.length<2) return '';
-  const cells = cols.map(([k,label,b])=>{
-    const eq = +b.equity, start = +b.start || 150, d = eq-start, pc = start ? d/start*100 : 0;
-    const n0 = +b.closed || 0;
-    const wr = b.win_rate==null ? '—' : Math.round(b.win_rate*(b.win_rate<=1?100:1))+'%';
-    return `<div class="sb-c"><span class="sb-l">${esc(label)}</span><b class="num">${usd(eq,2)}</b><span class="num sb-d ${cls(d)}">${moneyPct(d, pc)}</span><span class="sb-w">${n0?'Win '+wr+' · '+n0:'No trades'}</span></div>`;
-  }).join('');
-  return `<div class="scoreboard" style="--i:0">${cells}</div>`;
+function scoreboardHTML(){ return ''; }
+function heroSubHTML(){
+  const b=bookOf('main'); if(!b) return '';
+  const eq=+b.equity, start=+b.start||150, d=eq-start, pc=start?d/start*100:0, n0=+b.closed||0;
+  const wr=b.win_rate==null?null:Math.round(b.win_rate*(b.win_rate<=1?100:1));
+  const tr=n0?`Win ${wr==null?'—':wr+'%'} · ${n0} trade${n0===1?'':'s'}`:'No trades yet';
+  return `<span class="hero-sub"><span class="num ${cls(d)}">${moneyPct(d,pc)}</span> · ${esc(tr)}</span>`;
 }
-function v3TradeFor(tk){ return T.find(t=>t.ticker===tk && (t.book==='practice_v3' || t.engine==='v3') && (t.status==='OPEN'||t.status==='PENDING')); }
+function v3TradeFor(tk){ return T.find(t=>t.ticker===tk && t.book==='main' && !t.legacy_pre_autonomy && (t.status==='OPEN'||t.status==='PENDING')); }
+function airaTrade(tk){ return T.find(t=>t.ticker===tk && t.book==='aira' && (t.status==='OPEN'||t.status==='PENDING'||t.panel)); }
+function airaTag(tk){ return airaTrade(tk)?'<span class="tag aira">Aira</span>':''; }
 const WHY_SHORT = [
   [/quota/i,'strategy slots full'], [/OOS|forward-watch/i,'forward-watch only'], [/circuit|loss limit/i,'loss limit hit'],
   [/already/i,'already working'], [/max positions/i,'positions are full'], [/settled cash/i,'no settled cash'],
@@ -1039,14 +1038,22 @@ function lvCell(label, v, base){
   const pc = (v!=null && base) ? (v/base-1)*100 : null;
   return `<span class="pk-v"><em>${label}</em><b class="num">${usd(v,2)}</b>${pc==null?'':`<i class="num ${cls(pc)}">${pc>0?'+':''}${n(pc,1)}%</i>`}</span>`;
 }
+function airaOnlyRows(ps){
+  const mine=new Set(ps.map(p=>p.ticker));
+  return T.filter(t=>t.book==='aira'&&(t.status==='OPEN'||t.status==='PENDING')&&!mine.has(t.ticker)).map(t=>{
+    const lv=(t.reasoning||{}).levels||{}, ent=t.status==='OPEN'?entryRef(t):(trigPx(t)??lv.entry);
+    return `<button type="button" class="pick aira-only" data-trade="${esc(t.id)}"><span class="pk-top"><b>${esc(t.ticker)}</b><span class="tag aira">Aira</span><span class="state">${t.status==='OPEN'?'Entered':'Waiting'}</span></span><span class="plan">Aira's pick (not Main)</span><span class="pk-lv">${lvCell('Entry',ent,null)}${lvCell('Target 1',lv.t1,ent)}${lvCell('Target 2',lv.t2,ent)}</span></button>`;
+  }).join('');
+}
 function picksPanel(i){
   const ps = (V3().daily_picks||[]).slice(0,5);
-  if(!ps.length) return '';
+  if(!ps.length && !T.some(t=>t.book==='aira'&&(t.status==='OPEN'||t.status==='PENDING'))) return '';
   const rows = ps.map(p=>{
     const st = pickState(p);
-    return `<button type="button" class="pick" data-v3pick="${esc(p.ticker)}"><span class="pk-top"><b>${esc(p.ticker)}</b><span class="tag">${esc(stratTag(p))}</span><span class="state ${st.c}">${esc(st.txt)}</span></span><span class="plan">${esc(planShort(p.levels_label,'v3'))}${levelSets(p.ticker).length>1?' · differs from Main plan':''}</span><span class="pk-lv">${lvCell('Entry',p.entry,null)}${lvCell('Target 1',p.t1,p.entry)}${lvCell('Target 2',p.t2,p.entry)}</span></button>`;
+    return `<button type="button" class="pick" data-v3pick="${esc(p.ticker)}"><span class="pk-top"><b>${esc(p.ticker)}</b><span class="tag">${esc(stratTag(p))}</span>${airaTag(p.ticker)}<span class="state ${st.c}">${esc(st.txt)}</span></span><span class="plan">Main plan</span><span class="pk-lv">${lvCell('Entry',p.entry,null)}${lvCell('Target 1',p.t1,p.entry)}${lvCell('Target 2',p.t2,p.entry)}</span></button>`;
   }).join('');
-  return panel('picks','picks',"Today's picks",`<span class="chip">${ps.length}</span>`,rows,i);
+  const extra = airaOnlyRows(ps), nExtra = (extra.match(/class="pick aira-only"/g)||[]).length;
+  return panel('picks','picks',"Today's picks",`<span class="chip">${ps.length+nExtra}</span>`,rows+extra,i);
 }
 function rippleChain(idea){
   const steps = (idea.chain||[]).map(s=>typeof s==='string'?s:(s.label||s.step||s.name||'')).filter(Boolean);
@@ -1091,20 +1098,24 @@ function pickSheet(tk){
   const row = (l,v,extra)=>`<div class="inset-row"><span>${l}</span><b class="num">${v}${extra||''}</b></div>`;
   const why = (p.not_entered_because||[]).length ? `<p class="fine">Not entered: ${esc((p.not_entered_because||[]).join('; '))}</p>` : '';
   const facts = (p.facts||[]).slice(0,3).map(f=>`<li>${esc(typeof f==='string'?f:(f.text||''))}</li>`).join('');
-  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">${pos?"Today's pick #"+pos:'Candidate'} · New engine</p><h2 class="sheet-title">${esc(p.ticker)}</h2><p class="co">${esc(p.name||'')} · ${esc(p.strategy_label||stratTag(p))}</p><p class="pk-state"><span class="state ${st.c}">${esc(st.txt)}</span></p>${levelSetsHTML(p.ticker)}${levelSets(p.ticker).length>1?`<p class="eyebrow plan-h">${esc(planShort(p.levels_label,'v3'))} · order and size</p>`:`<p class="eyebrow plan-h">${esc(planShort(p.levels_label,'v3'))}</p>`}<div class="inset">${row(esc(kind), usd(p.entry,2))}${levelSets(p.ticker).length>1?'':row('Target 1', usd(p.t1,2), pc(p.t1))+row('Target 2', usd(p.t2,2), pc(p.t2))+row('Safety exit', usd(p.stop,2), pc(p.stop))}${p.max_hold?row('Sell by', p.max_hold+' trading days'):''}${sz.shares!=null?row('For $'+n(sz.equity||150,0), n(sz.shares,4)+' sh · '+usd(sz.dollars,0)):''}${sz.risk_usd!=null?row('Risk', usd(sz.risk_usd,2)):''}</div>${panelHTML(airaPanelFor(p.ticker))}<div class="prose"><p>${esc(p.reason||'')}</p>${facts?`<ul>${facts}</ul>`:''}</div>${why}</div>`);
+  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">${pos?"Today's pick #"+pos:'Candidate'} · Main</p><h2 class="sheet-title">${esc(p.ticker)}${airaTag(p.ticker)}</h2><p class="co">${esc(p.name||'')} · ${esc(p.strategy_label||stratTag(p))}</p><p class="pk-state"><span class="state ${st.c}">${esc(st.txt)}</span></p>${levelSetsHTML(p.ticker)}${levelSets(p.ticker).length>1?`<p class="eyebrow plan-h">Main plan · order and size</p>`:`<p class="eyebrow plan-h">Main plan</p>`}<div class="inset">${row(esc(kind), usd(p.entry,2))}${levelSets(p.ticker).length>1?'':row('Target 1', usd(p.t1,2), pc(p.t1))+row('Target 2', usd(p.t2,2), pc(p.t2))+row('Safety exit', usd(p.stop,2), pc(p.stop))}${p.max_hold?row('Sell by', p.max_hold+' trading days'):''}${sz.shares!=null?row('For $'+n(sz.equity||150,0), n(sz.shares,4)+' sh · '+usd(sz.dollars,0)):''}${sz.risk_usd!=null?row('Risk', usd(sz.risk_usd,2)):''}</div>${panelHTML(airaPanelFor(p.ticker))}<div class="prose"><p>${esc(p.reason||'')}</p>${facts?`<ul>${facts}</ul>`:''}</div>${why}</div>`);
 }
 
 /* Plan labels: the same ticker can carry levels from more than one engine. Always say whose plan a level set is. */
 function planShort(lbl, engine){
   const l=String(lbl||'');
-  if(/^main/i.test(l)||engine==='v2.2') return 'Main plan';
-  if(/new engine|v3/i.test(l)||engine==='v3') return 'New engine plan';
+  if(/comparator|v2\.2|background/i.test(l)||engine==='v2.2') return 'Old rules (background)';
+  if(/^main/i.test(l)||engine==='v3') return 'Main plan';
   if(/aira/i.test(l)) return 'Aira plan';
   return l ? l.split(/[\s(·]+/).slice(0,2).join(' ')+' plan' : '';
 }
-function levelSets(tk){ return ((D && D.levels_by_ticker)||{})[tk] || []; }
+function levelSets(tk){
+  const all=((D && D.levels_by_ticker)||{})[tk] || [];
+  const keep=all.filter(x=>x.book==='main'||x.book==='practice_v22'||x.engine==='v2.2');
+  return keep.sort((a,b)=>(a.book==='main'?0:1)-(b.book==='main'?0:1));
+}
 function fromPick(p){
-  return {id:'p-'+p.ticker, ticker:p.ticker, name:p.name, status:'PENDING', pick:true, book:'practice_v3', levels_label:p.levels_label,
+  return {id:'p-'+p.ticker, ticker:p.ticker, name:p.name, status:'PENDING', pick:true, book:'main', levels_label:p.levels_label,
     size_small:p.size?{equity:p.size.equity, shares:p.size.shares, dollars:p.size.dollars, risk_usd:p.size.risk_usd}:null,
     reasoning:{levels:{entry:p.entry, stop:p.stop, t1:p.t1, t2:p.t2}}, entry_order:{kind:(p.order||{}).kind, trigger:p.entry}};
 }
