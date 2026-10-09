@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='b64b5d7be7';
+const APP_VERSION='22e8ca43f1';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -149,7 +149,7 @@ function chgSpan(d,p,attrs,dp){
 function candleChart(t, plain){
   const tc=TECH[t.ticker];const lv=(t.reasoning||{}).levels||{};
   if(!tc||!tc.candles||!tc.candles.length)return '<div class="empty">Chart unavailable</div>';
-  const C=tc.candles.slice(-(innerWidth<480?46:60)),W=640,H=220,PR=plain?12:86,PT=14,PB=22;
+  const C=tc.candles.slice(-(innerWidth<480?46:60)),W=640,H=plain?300:220,PR=plain?12:86,PT=plain?20:14,PB=22;
   const ref=entryRef(t),zone=(t.entry_order||{}).kind==='limit_zone'&&t.status==='PENDING'?t.entry_order.zone:null;
   const lv2=[lv.stop,lv.t1,lv.t2,ref,...(zone||[])].filter(x=>x!=null);
   let lo=Math.min(...C.map(c=>c[3]),...lv2),hi=Math.max(...C.map(c=>c[2]),...lv2);const pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;
@@ -160,13 +160,25 @@ function candleChart(t, plain){
     cs+=`<line x1="${x}" x2="${x}" y1="${y(c[2])}" y2="${y(c[3])}" stroke="${col}" stroke-width="1"/>`+
         `<rect x="${x-bw/2}" y="${y(Math.max(c[1],c[4]))}" width="${bw}" height="${Math.max(1,Math.abs(y(c[1])-y(c[4])))}" rx="1" fill="${col}"/>`});
   let lines='',labels='',used=[];
-  const pairs=plain?[['Enter',ref,'var(--label2)'],['Take half',lv.t1,'var(--tint)'],['Rest',lv.t2,'var(--up)'],['Safety exit',lv.stop,'var(--down)']]:[['Stop',lv.stop,'var(--down)'],['Entry',ref,'var(--label2)'],['T1',lv.t1,'var(--tint)'],['T2',lv.t2,'var(--up)']];
+  const pairs=plain?[['Target 2',lv.t2,'var(--up)'],['Target 1',lv.t1,'var(--tint)'],['Entry',ref,'var(--label2)'],['Safety exit',lv.stop,'var(--down)']]:[['Stop',lv.stop,'var(--down)'],['Entry',ref,'var(--label2)'],['T1',lv.t1,'var(--tint)'],['T2',lv.t2,'var(--up)']];
+  const tags=[];
   pairs.forEach(([nm,v,col])=>{
     if(v==null)return; let yy=y(v); lines+=`<line x1="0" x2="${W-PR}" y1="${yy}" y2="${yy}" stroke="${col}" stroke-dasharray="3 4" stroke-width="1" stroke-opacity=".85"/>`;
-    if(plain) return;
+    if(plain){ tags.push({nm,v,col,y:yy}); return; }
     let ly=yy; used.forEach(u=>{if(Math.abs(u-ly)<13)ly=u+13}); used.push(ly);
     labels+=`<text x="${W-PR+8}" y="${ly+4}" fill="${col}">${nm} ${n(v)}</text>`});
-  const legend=plain?`<p class="legend">${pairs.filter(x=>x[1]!=null).map(([nm,v])=>esc(nm)+' $'+n(v)).join(' · ')}</p>`:'';
+  if(plain&&tags.length){
+    const FS=19, PH=28, GAP=4, top=PT+PH/2, bot=H-PB-PH/2;
+    tags.sort((a,b)=>a.y-b.y);
+    tags.forEach(t=>{ t.ly=Math.min(bot, Math.max(top, t.y)); });
+    for(let i=1;i<tags.length;i++) if(tags[i].ly<tags[i-1].ly+PH+GAP) tags[i].ly=tags[i-1].ly+PH+GAP;
+    if(tags[tags.length-1].ly>bot){ tags[tags.length-1].ly=bot; for(let i=tags.length-2;i>=0;i--) if(tags[i].ly>tags[i+1].ly-PH-GAP) tags[i].ly=tags[i+1].ly-PH-GAP; }
+    tags.forEach(t=>{
+      const text=`${t.nm} $${n(t.v)}`, tw=text.length*FS*0.56+18, x1=W-4-tw;
+      labels+=`<g class="lvtag"><rect x="${x1.toFixed(1)}" y="${(t.ly-PH/2).toFixed(1)}" width="${tw.toFixed(1)}" height="${PH}" rx="${PH/2}" fill="var(--group)" fill-opacity=".9" stroke="${t.col}" stroke-opacity=".45"/><text x="${(W-4-9).toFixed(1)}" y="${(t.ly+FS*0.35).toFixed(1)}" text-anchor="end" fill="${t.col}" style="font-size:${FS}px;font-weight:600;font-variant-numeric:tabular-nums">${esc(text)}</text></g>`;
+    });
+  }
+  const legend='';
   const cur=spotOf(t)||C[C.length-1][4], cx=(C.length-1)*step+step/2, cy=y(cur);
   const mk=`<line x1="${cx}" x2="${W-PR}" y1="${cy}" y2="${cy}" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="1 3"/><circle class="now" data-chart-px="${esc(t.ticker)}" cx="${cx}" cy="${cy}" r="4.5" fill="var(--label)"/>`;
   return legend+`<div class="chart-wrap" data-tk="${esc(t.ticker)}" data-n="${C.length}" data-step="${step}" data-w="${W}" data-pr="${PR}" data-lo="${lo}" data-hi="${hi}" data-pt="${PT}" data-pb="${PB}" data-h="${H}"><svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t.ticker)} chart">${g}${cs}${lines}${mk}${labels}<line class="xh" y1="${PT}" y2="${H-PB}"/><line class="yh" x2="${W-PR}"/></svg><div class="tip" hidden></div></div>`;
