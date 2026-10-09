@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='22c90b98f0';
+const APP_VERSION='b64b5d7be7';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -146,10 +146,10 @@ function chgSpan(d,p,attrs,dp){
   return `<span class="num ${cls(d)}" data-chg ${attrs}>${moneyPct(d,p,dp)}</span>`;
 }
 
-function candleChart(t){
+function candleChart(t, plain){
   const tc=TECH[t.ticker];const lv=(t.reasoning||{}).levels||{};
   if(!tc||!tc.candles||!tc.candles.length)return '<div class="empty">Chart unavailable</div>';
-  const C=tc.candles.slice(-(innerWidth<480?46:60)),W=640,H=220,PR=86,PT=14,PB=22;
+  const C=tc.candles.slice(-(innerWidth<480?46:60)),W=640,H=220,PR=plain?12:86,PT=14,PB=22;
   const ref=entryRef(t),zone=(t.entry_order||{}).kind==='limit_zone'&&t.status==='PENDING'?t.entry_order.zone:null;
   const lv2=[lv.stop,lv.t1,lv.t2,ref,...(zone||[])].filter(x=>x!=null);
   let lo=Math.min(...C.map(c=>c[3]),...lv2),hi=Math.max(...C.map(c=>c[2]),...lv2);const pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;
@@ -160,13 +160,16 @@ function candleChart(t){
     cs+=`<line x1="${x}" x2="${x}" y1="${y(c[2])}" y2="${y(c[3])}" stroke="${col}" stroke-width="1"/>`+
         `<rect x="${x-bw/2}" y="${y(Math.max(c[1],c[4]))}" width="${bw}" height="${Math.max(1,Math.abs(y(c[1])-y(c[4])))}" rx="1" fill="${col}"/>`});
   let lines='',labels='',used=[];
-  [['Stop',lv.stop,'var(--down)'],['Entry',ref,'var(--label2)'],['T1',lv.t1,'var(--tint)'],['T2',lv.t2,'var(--up)']].forEach(([nm,v,col])=>{
+  const pairs=plain?[['Enter',ref,'var(--label2)'],['Take half',lv.t1,'var(--tint)'],['Rest',lv.t2,'var(--up)'],['Safety exit',lv.stop,'var(--down)']]:[['Stop',lv.stop,'var(--down)'],['Entry',ref,'var(--label2)'],['T1',lv.t1,'var(--tint)'],['T2',lv.t2,'var(--up)']];
+  pairs.forEach(([nm,v,col])=>{
     if(v==null)return; let yy=y(v); lines+=`<line x1="0" x2="${W-PR}" y1="${yy}" y2="${yy}" stroke="${col}" stroke-dasharray="3 4" stroke-width="1" stroke-opacity=".85"/>`;
+    if(plain) return;
     let ly=yy; used.forEach(u=>{if(Math.abs(u-ly)<13)ly=u+13}); used.push(ly);
     labels+=`<text x="${W-PR+8}" y="${ly+4}" fill="${col}">${nm} ${n(v)}</text>`});
+  const legend=plain?`<p class="legend">${pairs.filter(x=>x[1]!=null).map(([nm,v])=>esc(nm)+' $'+n(v)).join(' · ')}</p>`:'';
   const cur=spotOf(t)||C[C.length-1][4], cx=(C.length-1)*step+step/2, cy=y(cur);
   const mk=`<line x1="${cx}" x2="${W-PR}" y1="${cy}" y2="${cy}" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="1 3"/><circle class="now" data-chart-px="${esc(t.ticker)}" cx="${cx}" cy="${cy}" r="4.5" fill="var(--label)"/>`;
-  return `<div class="chart-wrap" data-tk="${esc(t.ticker)}" data-n="${C.length}" data-step="${step}" data-w="${W}" data-pr="${PR}" data-lo="${lo}" data-hi="${hi}" data-pt="${PT}" data-pb="${PB}" data-h="${H}"><svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t.ticker)} chart">${g}${cs}${lines}${mk}${labels}<line class="xh" y1="${PT}" y2="${H-PB}"/><line class="yh" x2="${W-PR}"/></svg><div class="tip" hidden></div></div>`;
+  return legend+`<div class="chart-wrap" data-tk="${esc(t.ticker)}" data-n="${C.length}" data-step="${step}" data-w="${W}" data-pr="${PR}" data-lo="${lo}" data-hi="${hi}" data-pt="${PT}" data-pb="${PB}" data-h="${H}"><svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t.ticker)} chart">${g}${cs}${lines}${mk}${labels}<line class="xh" y1="${PT}" y2="${H-PB}"/><line class="yh" x2="${W-PR}"/></svg><div class="tip" hidden></div></div>`;
 }
 
 function histRows(book){
@@ -818,6 +821,125 @@ function missionHTML(){
   const eq=eqv!=null?usd(eqv,2):usd(m.start!=null?m.start:150,2);
   return `<button type="button" id="mission" class="mission"><b class="hero-eq num">${eq}</b><span class="goal">Goal ${usd(goal,0)}</span><span class="mbar" style="--p:${prog.toFixed(2)}%" aria-hidden="true"><i></i></span></button>`;
 }
+function screenSymbols(){
+  const seen=new Set(), out=[];
+  const add=tk=>{ if(!tk||seen.has(tk)) return; seen.add(tk); out.push(tk); };
+  (D.watch||[]).forEach(w=>add(w.ticker));
+  T.filter(t=>onFeed(t)&&(t.status==='OPEN'||t.status==='PENDING')).forEach(t=>add(t.ticker));
+  add('SPY');
+  return out;
+}
+function nameOf(tk){
+  const w=(D.watch||[]).find(x=>x.ticker===tk);
+  if(w&&w.name) return w.name;
+  const t=T.find(x=>x.ticker===tk&&x.name);
+  if(t) return t.name;
+  return tk==='SPY'?'S&P 500':'';
+}
+function folds(){ try{return JSON.parse(localStorage.getItem('sd.folds')||'{}')}catch(e){return {}} }
+function foldOpen(id){ const f=folds(); if(Object.prototype.hasOwnProperty.call(f,id)) return !!f[id]; return id==='prices'||id==='chart'; }
+function panelIcon(kind){
+  const d={
+    prices:'M4 19V9M10 19V5M16 19v-7M22 19V8',
+    chart:'M4 16l5-5 3 3 8-8M14 6h6v6',
+    queue:'M8 7h12M8 12h12M8 17h8',
+    history:'M12 8v5l3 2M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z'
+  }[kind];
+  return `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+}
+function panel(id, kind, title, extra, body, i){
+  const on=foldOpen(id);
+  return `<section class="panel" style="--i:${i}"><button type="button" class="panel-h${on?' on':''}" data-fold="${id}">${panelIcon(kind)}<span class="pt">${esc(title)}</span>${extra||''}<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="panel-body${on?' on':''}"><div class="panel-in">${body}</div></div></section>`;
+}
+function priceRows(){
+  return screenSymbols().map(tk=>{
+    const q=Prices.get(tk), mv=dayMove(tk);
+    const px=q?usd(q.p,2):'—';
+    const cap=mv.d==null?'':`<span class="cap num ${cls(mv.d)}" data-day="${esc(tk)}">${moneyPct(mv.d, mv.pct)}</span>`;
+    return `<div class="quote"><div><b>${esc(tk)}</b><span class="nm">${esc(nameOf(tk))}</span></div><div class="qright"><span class="qpx num" data-odo="${esc(tk)}">${odo(px)}</span>${cap}</div><span class="spk">${spark(tk)}</span></div>`;
+  }).join('');
+}
+function pricesPanel(i){
+  const nav=UI.navState();
+  const label=nav.c==='live'?'LIVE':nav.label;
+  return panel('prices','prices','Prices',`<span class="panel-state ${nav.c}" id="px-state">${esc(label)}</span>`, priceRows(), i);
+}
+function flatAccount(){
+  return `<div class="eq-flat"><svg class="eq" viewBox="0 0 640 168" role="img" aria-label="Account starts flat"><line x1="16" x2="624" y1="84" y2="84" stroke="var(--tint)" stroke-width="2.25" stroke-linecap="round"/><circle cx="624" cy="84" r="4.5" fill="var(--label)"/></svg><p class="chart-note">Starts Oct 9</p></div>`;
+}
+function missionArea(withSpy){
+  const rows=(D.mission_curve||[]).map(h=>({t:h.t, eq:+h.eq, spy:h.spy==null?null:+h.spy}));
+  if(rows.length<2) return flatAccount();
+  const W=640,H=168,P=8, vals=rows.map(r=>r.eq);
+  let lo=Math.min(...vals), hi=Math.max(...vals);
+  if(hi===lo){hi+=1;lo-=1}
+  const pad=(hi-lo)*0.12; lo-=pad; hi+=pad;
+  const X=i=>P+(i/(rows.length-1))*(W-2*P);
+  const Y=v=>P+(hi-v)/(hi-lo)*(H-2*P);
+  const xy=rows.map((r,i)=>[X(i),Y(r.eq)]);
+  const line=xy.map(p=>p.map(v=>v.toFixed(1)).join(',')).join('L');
+  const area=`M${xy[0].map(v=>v.toFixed(1)).join(',')}L${line.slice(line.indexOf('L')+1)}L${xy[xy.length-1][0].toFixed(1)},${(H-P).toFixed(1)}L${xy[0][0].toFixed(1)},${(H-P).toFixed(1)}Z`;
+  let spy='';
+  if(withSpy){
+    const both=rows.filter(r=>r.spy!=null);
+    if(both.length>=2){
+      const s0=both[0].spy, e0=both[0].eq;
+      const pts=both.map((r,i)=>`${X(rows.indexOf(r)).toFixed(1)},${Y(e0*(r.spy/s0)).toFixed(1)}`).join('L');
+      spy=`<path d="M${pts}" fill="none" stroke="var(--label3)" stroke-width="1.25" stroke-dasharray="4 3"/>`;
+    }
+  }
+  const meta=rows.map((r,i)=>{ const prev=i?rows[i-1]:null; const d=prev?r.eq-prev.eq:0; const pc=prev&&prev.eq?d/prev.eq*100:0; return {t:r.t, eq:r.eq, d, pct:pc, x:X(i)}; });
+  return `<div class="eq-scrub" data-pts="${esc(JSON.stringify(meta))}" data-w="${W}" data-h="${H}"><svg class="eq" viewBox="0 0 ${W} ${H}" role="img" aria-label="Account"><defs><linearGradient id="eqmain" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--tint)" stop-opacity=".28"/><stop offset="1" stop-color="var(--tint)" stop-opacity="0"/></linearGradient></defs><path d="${area}" fill="url(#eqmain)"/><path d="M${line}" fill="none" stroke="var(--tint)" stroke-width="2.25" stroke-linejoin="round"/>${spy}<circle class="eq-dot" r="4.5" fill="var(--label)" cx="${xy[xy.length-1][0]}" cy="${xy[xy.length-1][1]}"/></svg><div class="eq-tip" hidden></div></div>`;
+}
+function chartSymbols(){
+  const seen=new Set(), out=[];
+  const add=tk=>{ if(!tk||seen.has(tk)||tk==='SPY') return; seen.add(tk); out.push(tk); };
+  (D.watch||[]).forEach(w=>add(w.ticker));
+  T.filter(t=>onFeed(t)&&(t.status==='OPEN'||t.status==='PENDING')).forEach(t=>add(t.ticker));
+  return out;
+}
+function chartInner(){
+  const which=state.chart||'account';
+  if(which==='account') return missionArea(!!state.spy);
+  const w=(D.watch||[]).map(fromWatch).find(t=>t.ticker===which) || T.find(t=>t.ticker===which&&onFeed(t));
+  if(!w||!(TECH[which]||{}).candles) return '<p class="chart-note">No daily bars yet</p>';
+  return candleChart(w, true);
+}
+function chartPanel(i){
+  const which=state.chart||'account';
+  const chips=['account',...chartSymbols()].map(k=>`<button type="button" data-chart="${esc(k)}" class="${which===k?'on':''}">${k==='account'?'Account':esc(k)}</button>`).join('');
+  const spy=which==='account'?`<button type="button" class="spy-tog${state.spy?' on':''}" data-spy>S&P</button>`:'';
+  return panel('chart','chart','Chart', '', `<div class="switch">${chips}${spy}</div><div id="chart-body">${chartInner()}</div>`, i);
+}
+function upcomingPanel(i){
+  const rows=T.filter(t=>onFeed(t)&&t.status==='PENDING');
+  const body=rows.length?rows.map(t=>{
+    const ent=trigPx(t), aw=awayPair(t), until=(t.entry_order||{}).valid_until;
+    const away=aw?`${susd(aw.d,2)} · ${n(Math.abs(aw.pct),1)}% away`:'';
+    return `<div class="qrow"><b>${esc(t.ticker)}</b><span>Buy at ${usd(ent,2)}</span><span class="nm">${until?'until '+esc(dshort(until)):''}</span><span class="num">${esc(away)}</span></div>`;
+  }).join(''):`<div class="empty-row"><span class="empty-mark sm" aria-hidden="true"></span><p>Nothing queued · next scan 8:46 AM</p></div>`;
+  return panel('upcoming','queue','Upcoming','',body,i);
+}
+function historyPanel(i){
+  const rows=T.filter(t=>onFeed(t)&&t.status==='CLOSED');
+  const wins=rows.filter(t=>shownPnl(t)>0).length;
+  const chip=rows.length?`<span class="chip">${Math.round(wins/rows.length*100)}% · ${rows.length}</span>`:`<span class="chip">No closed trades yet</span>`;
+  const body=rows.length?rows.map(t=>{
+    const d=shownPnl(t), pair=pnlPair(t);
+    const why=(t.postmortem&&(t.postmortem.why||t.postmortem.one_liner))||'';
+    const buy=entryRef(t), sell=(t.exit||{}).spot;
+    return `<div class="hrow ${cls(d)}"><div><b>${esc(t.ticker)}</b><span class="nm">${esc(dshort(t.opened_at||t.created_at))}${t.closed_at?' – '+esc(dshort(t.closed_at)):''}</span></div><span class="num">${usd(buy,2)} → ${sell==null?'—':usd(sell,2)}</span><span class="cap num ${cls(d)}">${d==null?'':moneyPct(d, pair.pct)}</span>${why?`<p class="why">${esc(why)}</p>`:''}</div>`;
+  }).join(''):`<div class="empty-row"><span class="empty-mark sm" aria-hidden="true"></span><p>No closed trades yet</p></div>`;
+  return panel('history','history','History',chip,body,i);
+}
+function paintChart(){
+  const box=$('#chart-body'); if(!box) return;
+  const which=state.chart||'account';
+  $$('[data-chart]').forEach(b=>b.classList.toggle('on', b.dataset.chart===which));
+  const tog=document.querySelector('[data-spy]'); if(tog){ tog.hidden=which!=='account'; tog.classList.toggle('on', !!state.spy); }
+  box.innerHTML=chartInner();
+  bindChart(box);
+}
 function feedView(){
   const rows=T.filter(onFeed);
   const open=rows.filter(t=>t.status==='OPEN').sort((a,b)=>actionDist(a)-actionDist(b));
@@ -831,10 +953,11 @@ function feedView(){
   const cards=open.map(t=>feedCard(t, i++)).join('')+pend.map(t=>feedCard(t, i++)).join('');
   const next=watch.length?`<p class="nextlab">Next up</p>`+watch.map(t=>feedCard(t, i++)).join(''):'';
   const any=rows.length||watch.length;
-  const body=any
+  const top=any
     ? cards+next+`<p class="for150">For ${usd(mine,0)}</p>`
     : `<div class="empty-hero"><span class="empty-mark" aria-hidden="true"></span><p>No trade yet</p><p>Next scan 8:46 AM</p></div>`;
-  return `<section data-screen="feed">${missionHTML()}${body}</section>`;
+  const panels=pricesPanel(i)+chartPanel(i+1)+upcomingPanel(i+2)+historyPanel(i+3);
+  return `<section data-screen="feed">${missionHTML()}${top}${panels}</section>`;
 }
 function screen(){ return feedView(); }
 const TITLES={home:'Home',positions:'Positions',activity:'Activity',insights:'Insights',settings:'Settings'};
@@ -875,8 +998,7 @@ const Live = {
   key(){ try{return localStorage.getItem('sd.finnhub.key')||''}catch(e){return ''} },
   setKey(k){ if(k) localStorage.setItem('sd.finnhub.key',k); else localStorage.removeItem('sd.finnhub.key') },
   symbols(){
-    const s=new Set(['SPY']);
-    for(const t of (T||[])) if(t.status==='OPEN'||t.status==='PENDING') s.add(t.ticker);
+    const s=new Set(typeof screenSymbols==='function'?screenSymbols():['SPY']);
     return [...s].slice(0,50);
   },
   quote(tk){ return Prices.get(tk) },
@@ -1056,6 +1178,8 @@ const UI = {
     if(!D)return;
     this.strip();
     $$('[data-px]').forEach(el=>{ const q=Prices.get(el.dataset.px); if(q){ el.textContent=n(q.p); el.dataset.src=q.src } });
+    $$('[data-odo]').forEach(el=>{ const q=Prices.get(el.dataset.odo); if(!q) return; const text=usd(q.p,2); if(el.dataset.v===text) return; el.dataset.v=text; el.innerHTML=odo(text); });
+    const ps=$('#px-state'); if(ps){ const n=this.navState(); ps.textContent=n.c==='live'?'LIVE':n.label; ps.className='panel-state '+(n.c||''); }
     $$('[data-pl]').forEach(el=>{ const t=T.find(x=>x.id===el.dataset.pl); if(!t)return; const pair=pnlPair(t);
       if(pair.d==null){el.textContent='';return} el.textContent=pair.pct==null?susd(pair.d,2):moneyPct(pair.d, pair.pct);
       el.classList.remove('pos','neg','mute'); el.classList.add(cls(pair.d)); });
@@ -1140,7 +1264,8 @@ function bindChart(root){
       const tc=TECH[w.dataset.tk]; if(!tc)return; const c=tc.candles.slice(-nC)[i]; if(!c)return;
       xh.setAttribute('x1',(i+.5)*step); xh.setAttribute('x2',(i+.5)*step); yh.setAttribute('y1',pt.y); yh.setAttribute('y2',pt.y);
       xh.style.opacity=yh.style.opacity=1; tip.hidden=false; tip.style.left=Math.min(r.width-140, Math.max(8,(i+.5)*step/ (+w.dataset.w)*r.width))+'px';
-      tip.textContent=`${dshort(c[0])}  O ${n(c[1])} H ${n(c[2])} L ${n(c[3])} C ${n(c[4])}`;
+      const prev=i?tc.candles.slice(-nC)[i-1][4]:c[1]; const dlt=c[4]-prev, pc=prev?dlt/prev*100:0;
+      tip.textContent=`${dshort(c[0])}  ${usd(c[4],2)}  ${moneyPct(dlt, pc)}`;
     };
     w.addEventListener('pointermove',move); w.addEventListener('pointerdown',move);
     w.addEventListener('pointerleave',()=>{xh.style.opacity=yh.style.opacity=0;tip.hidden=true});
@@ -1295,7 +1420,7 @@ function paintKeyState(){
   s.textContent = Live.key()? 'A key is saved on this device.' : 'No key on this device.';
 }
 
-state.tab=qs.get('tab')||'home'; state.ins='perf'; state.act='fills'; state.emph=localStorage.getItem('sd.emph')||'usd'; state.range=localStorage.getItem('sd.range')||'ALL';
+state.tab=qs.get('tab')||'home'; state.ins='perf'; state.act='fills'; state.emph=localStorage.getItem('sd.emph')||'usd'; state.range=localStorage.getItem('sd.range')||'ALL'; state.chart=localStorage.getItem('sd.chart')||'account'; state.spy=localStorage.getItem('sd.spy')==='1';
 const scrollMem={};
 const tabPanels=new Map();
 let tabGen=0;
@@ -1416,6 +1541,15 @@ document.addEventListener('click', e=>{
     if(gearTaps.length>=5){ gearTaps=[]; openGear(); }
     return;
   }
+  const fold=e.target.closest('[data-fold]');
+  if(fold){
+    const body=fold.parentElement.querySelector('.panel-body');
+    if(body){ body.classList.toggle('on'); const open=body.classList.contains('on'); fold.classList.toggle('on', open); const f=folds(); f[fold.dataset.fold]=open; localStorage.setItem('sd.folds', JSON.stringify(f)); }
+    return;
+  }
+  const ch=e.target.closest('[data-chart]');
+  if(ch){ state.chart=ch.dataset.chart; localStorage.setItem('sd.chart', state.chart); paintChart(); return }
+  if(e.target.closest('[data-spy]')){ state.spy=!state.spy; localStorage.setItem('sd.spy', state.spy?'1':'0'); paintChart(); return }
   const cp=e.target.closest('[data-copy]'); if(cp){ const t=tradeById(cp.dataset.copy); if(!t) return; const text=guideText(t); const done=()=>{ cp.classList.add('done'); const s=cp.querySelector('span'); if(s) s.textContent='Copied'; }; if(navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(done); else done(); return }
   const card=e.target.closest('[data-card]'); if(card){ const box=card.closest('.tcard').querySelector('.steps'); if(box){ box.classList.toggle('on'); state.feedOpen=box.classList.contains('on')?card.dataset.card:null; } return }
   if(e.target.closest('#feed-dismiss')){ localStorage.setItem('sd.feed.dismissed','1'); UI.applyLive(); return }
