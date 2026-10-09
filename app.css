@@ -438,3 +438,9 @@ html[data-theme=light] .rt.avoid{color:#9b0018;background:#fdecea}
 .verdict{align-self:center;flex:0 0 auto;font:700 13px/1 -apple-system,system-ui;padding:6px 10px;border-radius:99px;background:rgba(120,120,128,.16)}
 .verdict.bull{color:var(--up);background:rgba(48,209,88,.16)}.verdict.bear{color:var(--down);background:rgba(255,69,58,.14)}
 .seat-line{margin:8px 0 0;font-size:15px;line-height:1.35;color:var(--label2);min-height:1.35em}
+
+.plan{display:block;margin-top:4px;font:500 11px/1.2 -apple-system,system-ui;letter-spacing:.02em;color:var(--label3)}
+.plan-i{color:var(--label3);font-size:13px}
+.chart-plan{margin:0;padding:0 14px 4px}
+.plan-h{margin-top:16px}
+.plan-set{margin-top:8px}

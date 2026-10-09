@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='a2663393dd';
+const APP_VERSION='7badcb8704';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -778,7 +778,7 @@ function odo(text, cls){
 }
 function fromWatch(w){
   const lv=w.levels||{}, o=w.order||{};
-  return {id:'w-'+w.ticker, ticker:w.ticker, name:w.name, status:'PENDING', watch:true, wait:w.wait, book:'main',
+  return {id:'w-'+w.ticker, ticker:w.ticker, name:w.name, status:'PENDING', watch:true, wait:w.wait, book:'main', levels_label:w.levels_label,
     size_small:w.size_small, reasoning:{levels:lv},
     entry_order:{kind:o.kind, trigger:o.trigger||lv.entry, zone:o.zone},
     earnings:w.earnings_date?{date:w.earnings_date}:{}, time_stop_weeks:w.hold_weeks};
@@ -810,7 +810,7 @@ function feedCard(t, i){
   return `<article class="tcard ${tone}" style="--i:${i||0}">
     <button type="button" class="hit" data-card="${t.id}">
       <b class="tk">${esc(t.ticker)}</b>
-      <span class="co">${esc(t.name||'')}</span>
+      <span class="co">${esc(t.name||'')}${t.levels_label?` · <span class="plan-i">${esc(planShort(t.levels_label))}</span>`:''}</span>
       <p class="trow">${icoLine('enter')}<span><em>Enter</em>${esc(enter)}</span></p>
       ${waitLine?`<p class="tstate">${esc(waitLine)}</p>`:''}
       <p class="trow">${icoLine('profit')}<span><em>Take profit</em>${esc(exit1)}</span></p>
@@ -834,10 +834,16 @@ function missionHTML(){
   const eq=eqv!=null?usd(eqv,2):usd(m.start!=null?m.start:150,2);
   return `<button type="button" id="mission" class="mission"><b class="hero-eq num">${eq}</b><span class="goal">Goal ${usd(goal,0)}</span><span class="mbar" style="--p:${prog.toFixed(2)}%" aria-hidden="true"><i></i></span></button>`;
 }
+function streamSymbols(){
+  const seen=new Set(), out=[];
+  for(const tk of screenSymbols().concat((D&&D.price_symbols)||[])){ if(tk&&!seen.has(tk)){ seen.add(tk); out.push(tk); } }
+  return out.slice(0,50);
+}
 function screenSymbols(){
   const seen=new Set(), out=[];
   const add=tk=>{ if(!tk||seen.has(tk)) return; seen.add(tk); out.push(tk); };
   (D.watch||[]).forEach(w=>add(w.ticker));
+  (((D.v3||{}).daily_picks)||[]).slice(0,5).forEach(p=>add(p.ticker));
   T.filter(t=>onFeed(t)&&(t.status==='OPEN'||t.status==='PENDING')).forEach(t=>add(t.ticker));
   add('SPY');
   return out;
@@ -847,6 +853,8 @@ function nameOf(tk){
   if(w&&w.name) return w.name;
   const t=T.find(x=>x.ticker===tk&&x.name);
   if(t) return t.name;
+  const pk=(((D.v3||{}).daily_picks)||[]).find(p=>p.ticker===tk&&p.name);
+  if(pk) return pk.name;
   return tk==='SPY'?'S&P 500':'';
 }
 function folds(){ try{return JSON.parse(localStorage.getItem('sd.folds')||'{}')}catch(e){return {}} }
@@ -911,14 +919,19 @@ function chartSymbols(){
   const add=tk=>{ if(!tk||seen.has(tk)||tk==='SPY') return; seen.add(tk); out.push(tk); };
   (D.watch||[]).forEach(w=>add(w.ticker));
   T.filter(t=>onFeed(t)&&(t.status==='OPEN'||t.status==='PENDING')).forEach(t=>add(t.ticker));
+  (((D.v3||{}).daily_picks)||[]).slice(0,5).forEach(p=>add(p.ticker));
   return out;
 }
 function chartInner(){
   const which=state.chart||'account';
   if(which==='account') return missionArea(!!state.spy);
-  const w=(D.watch||[]).map(fromWatch).find(t=>t.ticker===which) || T.find(t=>t.ticker===which&&onFeed(t));
+  const wl=(D.watch||[]).find(t=>t.ticker===which);
+  const pk=(((D.v3||{}).daily_picks)||[]).find(p=>p.ticker===which);
+  const w=(wl&&fromWatch(wl)) || T.find(t=>t.ticker===which&&onFeed(t)) || (pk&&fromPick(pk));
   if(!w||!(TECH[which]||{}).candles) return '<p class="chart-note">No daily bars yet</p>';
-  return candleChart(w, true);
+  const lbl=wl?planShort(wl.levels_label,'v2.2'):(pk&&!T.find(t=>t.ticker===which&&onFeed(t)))?planShort(pk.levels_label,'v3'):'Main plan';
+  const more=levelSets(which).length>1?' · other plans in the sheet':'';
+  return `<p class="plan chart-plan">${esc(lbl+more)}</p>`+candleChart(w, true);
 }
 function chartPanel(i){
   const which=state.chart||'account';
@@ -1031,7 +1044,7 @@ function picksPanel(i){
   if(!ps.length) return '';
   const rows = ps.map(p=>{
     const st = pickState(p);
-    return `<button type="button" class="pick" data-v3pick="${esc(p.ticker)}"><span class="pk-top"><b>${esc(p.ticker)}</b><span class="tag">${esc(stratTag(p))}</span><span class="state ${st.c}">${esc(st.txt)}</span></span><span class="pk-lv">${lvCell('Entry',p.entry,null)}${lvCell('Target 1',p.t1,p.entry)}${lvCell('Target 2',p.t2,p.entry)}</span></button>`;
+    return `<button type="button" class="pick" data-v3pick="${esc(p.ticker)}"><span class="pk-top"><b>${esc(p.ticker)}</b><span class="tag">${esc(stratTag(p))}</span><span class="state ${st.c}">${esc(st.txt)}</span></span><span class="plan">${esc(planShort(p.levels_label,'v3'))}${levelSets(p.ticker).length>1?' · differs from Main plan':''}</span><span class="pk-lv">${lvCell('Entry',p.entry,null)}${lvCell('Target 1',p.t1,p.entry)}${lvCell('Target 2',p.t2,p.entry)}</span></button>`;
   }).join('');
   return panel('picks','picks',"Today's picks",`<span class="chip">${ps.length}</span>`,rows,i);
 }
@@ -1078,7 +1091,29 @@ function pickSheet(tk){
   const row = (l,v,extra)=>`<div class="inset-row"><span>${l}</span><b class="num">${v}${extra||''}</b></div>`;
   const why = (p.not_entered_because||[]).length ? `<p class="fine">Not entered: ${esc((p.not_entered_because||[]).join('; '))}</p>` : '';
   const facts = (p.facts||[]).slice(0,3).map(f=>`<li>${esc(typeof f==='string'?f:(f.text||''))}</li>`).join('');
-  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">${pos?"Today's pick #"+pos:'Candidate'} · New engine</p><h2 class="sheet-title">${esc(p.ticker)}</h2><p class="co">${esc(p.name||'')} · ${esc(p.strategy_label||stratTag(p))}</p><p class="pk-state"><span class="state ${st.c}">${esc(st.txt)}</span></p><div class="inset">${row(esc(kind), usd(p.entry,2))}${row('Target 1', usd(p.t1,2), pc(p.t1))}${row('Target 2', usd(p.t2,2), pc(p.t2))}${row('Safety exit', usd(p.stop,2), pc(p.stop))}${p.max_hold?row('Sell by', p.max_hold+' trading days'):''}${sz.shares!=null?row('For $'+n(sz.equity||150,0), n(sz.shares,4)+' sh · '+usd(sz.dollars,0)):''}${sz.risk_usd!=null?row('Risk', usd(sz.risk_usd,2)):''}</div>${panelHTML(airaPanelFor(p.ticker))}<div class="prose"><p>${esc(p.reason||'')}</p>${facts?`<ul>${facts}</ul>`:''}</div>${why}</div>`);
+  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">${pos?"Today's pick #"+pos:'Candidate'} · New engine</p><h2 class="sheet-title">${esc(p.ticker)}</h2><p class="co">${esc(p.name||'')} · ${esc(p.strategy_label||stratTag(p))}</p><p class="pk-state"><span class="state ${st.c}">${esc(st.txt)}</span></p>${levelSetsHTML(p.ticker)}${levelSets(p.ticker).length>1?`<p class="eyebrow plan-h">${esc(planShort(p.levels_label,'v3'))} · order and size</p>`:`<p class="eyebrow plan-h">${esc(planShort(p.levels_label,'v3'))}</p>`}<div class="inset">${row(esc(kind), usd(p.entry,2))}${levelSets(p.ticker).length>1?'':row('Target 1', usd(p.t1,2), pc(p.t1))+row('Target 2', usd(p.t2,2), pc(p.t2))+row('Safety exit', usd(p.stop,2), pc(p.stop))}${p.max_hold?row('Sell by', p.max_hold+' trading days'):''}${sz.shares!=null?row('For $'+n(sz.equity||150,0), n(sz.shares,4)+' sh · '+usd(sz.dollars,0)):''}${sz.risk_usd!=null?row('Risk', usd(sz.risk_usd,2)):''}</div>${panelHTML(airaPanelFor(p.ticker))}<div class="prose"><p>${esc(p.reason||'')}</p>${facts?`<ul>${facts}</ul>`:''}</div>${why}</div>`);
+}
+
+/* Plan labels: the same ticker can carry levels from more than one engine. Always say whose plan a level set is. */
+function planShort(lbl, engine){
+  const l=String(lbl||'');
+  if(/^main/i.test(l)||engine==='v2.2') return 'Main plan';
+  if(/new engine|v3/i.test(l)||engine==='v3') return 'New engine plan';
+  if(/aira/i.test(l)) return 'Aira plan';
+  return l ? l.split(/[\s(·]+/).slice(0,2).join(' ')+' plan' : '';
+}
+function levelSets(tk){ return ((D && D.levels_by_ticker)||{})[tk] || []; }
+function fromPick(p){
+  return {id:'p-'+p.ticker, ticker:p.ticker, name:p.name, status:'PENDING', pick:true, book:'practice_v3', levels_label:p.levels_label,
+    size_small:p.size?{equity:p.size.equity, shares:p.size.shares, dollars:p.size.dollars, risk_usd:p.size.risk_usd}:null,
+    reasoning:{levels:{entry:p.entry, stop:p.stop, t1:p.t1, t2:p.t2}}, entry_order:{kind:(p.order||{}).kind, trigger:p.entry}};
+}
+function levelSetsHTML(tk){
+  const sets=levelSets(tk);
+  if(sets.length<2) return '';
+  const pc=(v,e)=>(v!=null&&e)?` <span class="num ${cls(v-e)}">${v>e?'+':''}${n((v/e-1)*100,1)}%</span>`:'';
+  const row=(l,v,e)=>`<div class="inset-row"><span>${l}</span><b class="num">${usd(v,2)}${e==null?'':pc(v,e)}</b></div>`;
+  return sets.map(x=>`<p class="eyebrow plan-h">${esc(planShort(x.label,x.engine))}</p><div class="inset plan-set">${row('Entry',x.entry,null)}${row('Target 1',x.t1,x.entry)}${row('Target 2',x.t2,x.entry)}${row('Safety exit',x.stop,x.entry)}</div>`).join('');
 }
 
 /* One price store. Every surface reads Prices.get(symbol). Nothing else may
@@ -1117,7 +1152,7 @@ const Live = {
   key(){ try{return localStorage.getItem('sd.finnhub.key')||''}catch(e){return ''} },
   setKey(k){ if(k) localStorage.setItem('sd.finnhub.key',k); else localStorage.removeItem('sd.finnhub.key') },
   symbols(){
-    const s=new Set(typeof screenSymbols==='function'?screenSymbols():['SPY']);
+    const s=new Set(typeof streamSymbols==='function'?streamSymbols():['SPY']);
     return [...s].slice(0,50);
   },
   quote(tk){ return Prices.get(tk) },
