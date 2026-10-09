@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='22e8ca43f1';
+const APP_VERSION='a2663393dd';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -545,6 +545,7 @@ function detailHTML(t){
       <h2 class="sheet-title">${esc(t.ticker)} <span class="num livepx" data-px="${esc(t.ticker)}">${n(spotOf(t))}</span></h2>
       <p class="co">${esc(t.name||'')} · ${esc(setupName(t))}</p>
       ${pln}
+      ${t.book==='aira'?panelHTML(t.panel):''}
       ${candleChart(t)}
       ${legendDots()}
       ${track(t)}
@@ -849,13 +850,15 @@ function nameOf(tk){
   return tk==='SPY'?'S&P 500':'';
 }
 function folds(){ try{return JSON.parse(localStorage.getItem('sd.folds')||'{}')}catch(e){return {}} }
-function foldOpen(id){ const f=folds(); if(Object.prototype.hasOwnProperty.call(f,id)) return !!f[id]; return id==='prices'||id==='chart'; }
+function foldOpen(id){ const f=folds(); if(Object.prototype.hasOwnProperty.call(f,id)) return !!f[id]; return id==='prices'||id==='chart'||id==='picks'; }
 function panelIcon(kind){
   const d={
     prices:'M4 19V9M10 19V5M16 19v-7M22 19V8',
     chart:'M4 16l5-5 3 3 8-8M14 6h6v6',
     queue:'M8 7h12M8 12h12M8 17h8',
-    history:'M12 8v5l3 2M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z'
+    history:'M12 8v5l3 2M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z',
+    picks:'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z',
+    ripple:'M3 12h4l3-7 4 14 3-7h4'
   }[kind];
   return `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
 }
@@ -968,11 +971,115 @@ function feedView(){
   const top=any
     ? cards+next+`<p class="for150">For ${usd(mine,0)}</p>`
     : `<div class="empty-hero"><span class="empty-mark" aria-hidden="true"></span><p>No trade yet</p><p>Next scan 8:46 AM</p></div>`;
-  const panels=pricesPanel(i)+chartPanel(i+1)+upcomingPanel(i+2)+historyPanel(i+3);
+  const panels=scoreboardHTML()+picksPanel(i)+pricesPanel(i+1)+chartPanel(i+2)+upcomingPanel(i+3)+historyPanel(i+4)+ripplePanel(i+5);
   return `<section data-screen="feed">${missionHTML()}${top}${panels}</section>`;
 }
 function screen(){ return feedView(); }
 const TITLES={home:'Home',positions:'Positions',activity:'Activity',insights:'Insights',settings:'Settings'};
+
+/* Engine v3.0 surfaces: regime chip, scoreboard, today's picks, ripple effects, Aira panel.
+   Reads D.v3, D.books and trades only. Renders nothing when the v3 block is absent. */
+const V3 = () => (D && D.v3) || {};
+const STRAT = {pullback:'Pullback', momentum:'Momentum', breakout:'Breakout', gap_hold:'Gap hold', gap_go:'Gap and go', mean_rev:'Bounce', nr7:'Tight range'};
+function stratTag(p){ return STRAT[p.strategy] || (p.strategy_label||'').split(' ')[0] || 'Setup'; }
+function regimeWord(){
+  const r = V3().regime || ((D && D.scan) || {}).regime || {};
+  const s = r.state;
+  if(s==='risk-off') return {w:'weak', c:'neg'};
+  if(s==='caution') return {w:'mixed', c:'mid'};
+  if(s==='risk-on') return {w:'strong', c:'pos'};
+  return null;
+}
+function paintRegime(){
+  const el = $('#regime'); if(!el) return;
+  const r = regimeWord();
+  el.hidden = !r;
+  if(r){ el.textContent = 'Market: ' + r.w; el.className = 'regime-chip ' + r.c; }
+}
+function bookOf(key){ return ((D && D.books) || {})[key] || null; }
+function scoreboardHTML(){
+  const cols = [['main','System'],['aira','Aira'],['practice_v3','New engine']].map(([k,label])=>[k,label,bookOf(k)]).filter(x=>x[2]);
+  if(cols.length<2) return '';
+  const cells = cols.map(([k,label,b])=>{
+    const eq = +b.equity, start = +b.start || 150, d = eq-start, pc = start ? d/start*100 : 0;
+    const n0 = +b.closed || 0;
+    const wr = b.win_rate==null ? '—' : Math.round(b.win_rate*(b.win_rate<=1?100:1))+'%';
+    return `<div class="sb-c"><span class="sb-l">${esc(label)}</span><b class="num">${usd(eq,2)}</b><span class="num sb-d ${cls(d)}">${moneyPct(d, pc)}</span><span class="sb-w">${n0?'Win '+wr+' · '+n0:'No trades'}</span></div>`;
+  }).join('');
+  return `<div class="scoreboard" style="--i:0">${cells}</div>`;
+}
+function v3TradeFor(tk){ return T.find(t=>t.ticker===tk && (t.book==='practice_v3' || t.engine==='v3') && (t.status==='OPEN'||t.status==='PENDING')); }
+const WHY_SHORT = [
+  [/quota/i,'strategy slots full'], [/OOS|forward-watch/i,'forward-watch only'], [/circuit|loss limit/i,'loss limit hit'],
+  [/already/i,'already working'], [/max positions/i,'positions are full'], [/settled cash/i,'no settled cash'],
+  [/earnings/i,'earnings too close'], [/avoid/i,'on avoid list']
+];
+function pickState(p){
+  const t = v3TradeFor(p.ticker);
+  if(t && t.status==='OPEN') return {txt:'Entered', c:'in'};
+  if(t) return {txt:'Waiting · order is placed', c:'wait'};
+  const why = (p.not_entered_because||[])[0];
+  if(why){ const m = WHY_SHORT.find(([re])=>re.test(why)); return {txt:'Waiting · '+(m?m[1]:why.split(/\s+/).slice(0,3).join(' ')), c:'wait'}; }
+  return {txt:'Waiting · not booked yet', c:'wait'};
+}
+function lvCell(label, v, base){
+  const pc = (v!=null && base) ? (v/base-1)*100 : null;
+  return `<span class="pk-v"><em>${label}</em><b class="num">${usd(v,2)}</b>${pc==null?'':`<i class="num ${cls(pc)}">${pc>0?'+':''}${n(pc,1)}%</i>`}</span>`;
+}
+function picksPanel(i){
+  const ps = (V3().daily_picks||[]).slice(0,5);
+  if(!ps.length) return '';
+  const rows = ps.map(p=>{
+    const st = pickState(p);
+    return `<button type="button" class="pick" data-v3pick="${esc(p.ticker)}"><span class="pk-top"><b>${esc(p.ticker)}</b><span class="tag">${esc(stratTag(p))}</span><span class="state ${st.c}">${esc(st.txt)}</span></span><span class="pk-lv">${lvCell('Entry',p.entry,null)}${lvCell('Target 1',p.t1,p.entry)}${lvCell('Target 2',p.t2,p.entry)}</span></button>`;
+  }).join('');
+  return panel('picks','picks',"Today's picks",`<span class="chip">${ps.length}</span>`,rows,i);
+}
+function rippleChain(idea){
+  const steps = (idea.chain||[]).map(s=>typeof s==='string'?s:(s.label||s.step||s.name||'')).filter(Boolean);
+  return steps.map((s,k)=>`${k?'<span class="arr" aria-hidden="true">→</span>':''}<span class="step">${esc(s)}</span>`).join('');
+}
+function ripplePanel(i){
+  const all = ((V3().cascade)||{}).ideas||[];
+  const ideas = all.filter(x=>x.status==='qualified').concat(all.filter(x=>x.status==='news_unconfirmed').slice(0,4));
+  if(!ideas.length) return '';
+  const live = ideas.filter(x=>x.status==='qualified').length;
+  const rows = ideas.map(x=>{
+    const watch = x.status!=='qualified';
+    const longs = (x.long||[]).slice(0,4).join(' '), avoid = (x.avoid||[]).slice(0,4).join(' ');
+    const tags = (longs?`<span class="rt bull">${watch?'Watch':'Bull'} <b>${esc(longs)}</b></span>`:'') + (avoid?`<span class="rt avoid">Avoid <b>${esc(avoid)}</b></span>`:'');
+    return `<div class="ripple${watch?' dim':''}"><div class="chain">${rippleChain(x)}</div><div class="rtags">${tags}</div></div>`;
+  }).join('');
+  return panel('ripple','ripple','Ripple effects',`<span class="chip">${live} live</span>`,rows,i);
+}
+const SEATS = [['macroeconomist','Macro'],['industry_analyst','Industry'],['investment_banker','Banker'],['wall_street_pm','Pro'],['retail_trader','Retail'],['public_consumer','Public']];
+function panelHTML(pn){
+  if(!pn || !pn.seats) return '';
+  const dots = SEATS.map(([k,l])=>{
+    const s = pn.seats[k] || {};
+    const st = s.stance==='bull'?'bull':s.stance==='bear'?'bear':'neutral';
+    return `<button type="button" class="seat ${st}" data-seat="${esc(l)}" data-line="${esc(s.line||'')}" aria-label="${esc(l)}: ${st}"><i></i><span>${esc(l)}</span></button>`;
+  }).join('');
+  const bl = pn.blended || {};
+  const v = pn.verdict || bl.verdict || 'neutral';
+  const sc = bl.score==null ? '' : ` ${bl.score>0?'+':''}${n(bl.score,2)}`;
+  const ov = pn.override_reason ? `<p class="seat-line">Override: ${esc(pn.override_reason)}</p>` : '';
+  return `<div class="panelx"><p class="eyebrow">Panel</p><div class="seats">${dots}<span class="verdict ${v==='bull'?'bull':v==='bear'?'bear':'neutral'}">${esc(v[0].toUpperCase()+v.slice(1))}${esc(sc)}</span></div><p class="seat-line" id="seat-line">Tap a dot to read that view.</p>${ov}</div>`;
+}
+function airaPanelFor(tk){ const t = T.find(x=>x.ticker===tk && x.book==='aira' && x.panel); return t ? t.panel : null; }
+function pickSheet(tk){
+  const daily = V3().daily_picks||[];
+  const p = daily.concat(V3().candidates||[]).find(x=>x.ticker===tk);
+  if(!p) return;
+  const pos = daily.indexOf(p)+1;
+  const st = pickState(p), sz = p.size || {};
+  const pc = v => (v!=null && p.entry) ? ` <span class="num ${cls(v-p.entry)}">${(v>p.entry?'+':'')}${n((v/p.entry-1)*100,1)}%</span>` : '';
+  const kind = ((p.order||{}).kind==='buy_stop'?'Buy if it rises to':(p.order||{}).kind==='moo'?'Buy at the open near':'Buy at or below');
+  const row = (l,v,extra)=>`<div class="inset-row"><span>${l}</span><b class="num">${v}${extra||''}</b></div>`;
+  const why = (p.not_entered_because||[]).length ? `<p class="fine">Not entered: ${esc((p.not_entered_because||[]).join('; '))}</p>` : '';
+  const facts = (p.facts||[]).slice(0,3).map(f=>`<li>${esc(typeof f==='string'?f:(f.text||''))}</li>`).join('');
+  Sheet.open(`<div class="sheet-h"><button class="x" data-close>Close</button><div class="grab"></div></div><div class="sheet-body"><p class="eyebrow">${pos?"Today's pick #"+pos:'Candidate'} · New engine</p><h2 class="sheet-title">${esc(p.ticker)}</h2><p class="co">${esc(p.name||'')} · ${esc(p.strategy_label||stratTag(p))}</p><p class="pk-state"><span class="state ${st.c}">${esc(st.txt)}</span></p><div class="inset">${row(esc(kind), usd(p.entry,2))}${row('Target 1', usd(p.t1,2), pc(p.t1))}${row('Target 2', usd(p.t2,2), pc(p.t2))}${row('Safety exit', usd(p.stop,2), pc(p.stop))}${p.max_hold?row('Sell by', p.max_hold+' trading days'):''}${sz.shares!=null?row('For $'+n(sz.equity||150,0), n(sz.shares,4)+' sh · '+usd(sz.dollars,0)):''}${sz.risk_usd!=null?row('Risk', usd(sz.risk_usd,2)):''}</div>${panelHTML(airaPanelFor(p.ticker))}<div class="prose"><p>${esc(p.reason||'')}</p>${facts?`<ul>${facts}</ul>`:''}</div>${why}</div>`);
+}
 
 /* One price store. Every surface reads Prices.get(symbol). Nothing else may
    read data.json quotes or invent a price. src is trade | quote | ledger. */
@@ -1484,6 +1591,7 @@ function render(bust){
   const title=$('#title'); if(title) title.textContent=name;
   $$('#tabs [data-tab]').forEach(b=>b.classList.toggle('on', b.dataset.tab===tab && !b.classList.contains('feed')));
   paintAcct();
+  paintRegime();
   paintKeyState();
   UI.applyLive();
   if(tab==='settings') wireSettings();
@@ -1553,6 +1661,8 @@ document.addEventListener('click', e=>{
     if(gearTaps.length>=5){ gearTaps=[]; openGear(); }
     return;
   }
+  const vp=e.target.closest('[data-v3pick]'); if(vp){ pickSheet(vp.dataset.v3pick); return }
+  const seat=e.target.closest('[data-seat]'); if(seat){ const ln=$('#seat-line'); $$('.seat').forEach(x=>x.classList.toggle('on', x===seat)); if(ln) ln.textContent=seat.dataset.seat+': '+(seat.dataset.line||'No note.'); return }
   const fold=e.target.closest('[data-fold]');
   if(fold){
     const body=fold.parentElement.querySelector('.panel-body');

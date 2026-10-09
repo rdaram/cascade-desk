@@ -19,7 +19,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preload" href="data.json" as="fetch" crossorigin>
-<link rel="stylesheet" href="app.css?v=22e8ca43f1">
+<link rel="stylesheet" href="app.css?v=a2663393dd">
 </head>
 <body>
 <script>document.addEventListener("gesturestart",function(e){e.preventDefault()},{passive:false});document.addEventListener("gesturechange",function(e){e.preventDefault()},{passive:false});document.addEventListener("touchmove",function(e){if(e.touches&&e.touches.length>1)e.preventDefault()},{passive:false});document.addEventListener("dblclick",function(e){e.preventDefault()});</script>
@@ -30,6 +30,7 @@
     <span id="title-book" class="title-book"></span>
     <span class="bar-sp"></span>
     <button type="button" id="bell" class="bell" aria-label="Alerts"><svg viewBox="0 0 24 24"><path d="M6 16V10a6 6 0 1 1 12 0v6l1.5 2h-15z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><b id="bell-n" hidden>0</b></button>
+    <span id="regime" class="regime-chip" hidden></span>
     <span id="mkt" class="nav-status" title=""><i class="dot"></i><span id="mkt-t">After hours</span></span>
   </div>
   <div id="acct-switch" class="pills" role="tablist"></div>
@@ -66,6 +67,6 @@
 <div id="toast" class="toast glass" hidden role="status"></div>
 <noscript><p class="empty">Swing Desk needs JavaScript.</p></noscript>
 
-<script src="app.js?v=22e8ca43f1" defer></script>
+<script src="app.js?v=a2663393dd" defer></script>
 </body>
 </html>
