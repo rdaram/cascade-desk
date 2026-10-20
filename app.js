@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='b0e74f019f';
+const APP_VERSION='a612b979e3';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -947,13 +947,13 @@ function upcomingPanel(i){
   return panel('upcoming','queue','Upcoming','',body,i);
 }
 function historyPanel(i){
-  const rows=T.filter(t=>onFeed(t)&&t.status==='CLOSED');
+  const rows=T.filter(t=>onFeed({...t,status:'OPEN'})&&t.status==='CLOSED').sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||'')));  /* onFeed() only admits OPEN/PENDING, so closed trades never reached History */
   const wins=rows.filter(t=>shownPnl(t)>0).length;
   const chip=rows.length?`<span class="chip">${Math.round(wins/rows.length*100)}% · ${rows.length}</span>`:`<span class="chip">No closed trades yet</span>`;
   const body=rows.length?rows.map(t=>{
     const d=shownPnl(t), pair=pnlPair(t);
     const why=(t.postmortem&&(t.postmortem.why||t.postmortem.one_liner))||'';
-    const buy=entryRef(t), sell=(t.exit||{}).spot;
+    const buy=entryRef(t), sell=(t.exit||{}).spot??(t.exit||{}).value??((t.fills||[]).filter(x=>x.side==='sell').slice(-1)[0]||{}).fill_price;
     return `<div class="hrow ${cls(d)}"><div><b>${esc(t.ticker)}</b><span class="nm">${esc(dshort(t.opened_at||t.created_at))}${t.closed_at?' – '+esc(dshort(t.closed_at)):''}</span></div><span class="num">${usd(buy,2)} → ${sell==null?'—':usd(sell,2)}</span><span class="cap num ${cls(d)}">${d==null?'':moneyPct(d, pair.pct)}</span>${why?`<p class="why">${esc(why)}</p>`:''}</div>`;
   }).join(''):`<div class="empty-row"><span class="empty-mark sm" aria-hidden="true"></span><p>No closed trades yet</p></div>`;
   const ob=((D.books||{}).practice_v22);
