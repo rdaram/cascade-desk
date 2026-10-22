@@ -1,7 +1,7 @@
 (function(){
 "use strict";
 /* Swing Desk app. Paper trading only. Live prices are informational; the official ledger is data.json. */
-const APP_VERSION='a612b979e3';
+const APP_VERSION='c29b1dae66';
 const CAL={"holidays": ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24", "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19", "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25"], "early_close": {"2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00", "2028-07-03": "13:00", "2028-11-24": "13:00"}, "session": {"open": "09:30", "close": "16:00", "tz": "America/New_York"}, "source": "NYSE Group holiday and early closings calendar 2026-2028 (nyse.com/trade/hours-calendars)"};
 const qs=new URLSearchParams(location.search);
 const STATIC=qs.has('static')||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -74,6 +74,7 @@ function orderText(t){const o=t.entry_order||{};
 function setupName(t){const sh=t.contracts_open??t.contracts;return t.setup_type&&SETUPN[t.setup_type]?SETUPN[t.setup_type]+' · '+n(sh,0)+' shares':(t.direction==='short'?'Short ':'Long ')+n(sh,0)+' shares'}
 const rrTxt=x=>x==null?'n/a':String(Math.round(x*100)/100);
 function earnTxt(t){const e=t.earnings||{};if(!e.date)return 'n/a';return dshort(e.date)+((e.note||'').startsWith('ESTIMATE')?' est.':'')}
+function heldSymbols(){ const s=new Set(); for(const a of Object.values(ACC||{})) for(const p of (a.positions||[])) if(p.ticker) s.add(p.ticker); return [...s] }
 function bookEq(b){
   const k=D.books[b]||{equity:0,pnl:0,pnl_pct:0,start:100000};
   let d=0,any=false;
@@ -634,7 +635,7 @@ function perfPanel(){
   const bars=rows.length?`<div class="card"><p class="eyebrow">Open R, not closed trades</p><div class="bars">${rows.map(r=>`<div class="bar-row"><b>${esc(r.ticker)}</b><i style="width:${Math.abs(r.r)/max*100}%;background:${r.r>=0?'var(--up)':'var(--down)'}"></i><span class="num ${cls(r.r)}">${r.pnl==null?'':moneyPct(r.pnl, r.return_on_risk_pct, 0)} · ${n(r.r,2)}R</span></div>`).join('')}</div></div>`:'<div class="empty">No open R yet.</div>';
   const wr=a.closed? (a.win_rate==null?'n/a':n(a.win_rate,0)+'%') : null;
   return `<section>
-    <p class="hero-eq num">${usd(be.eq,2)}</p>
+    <p class="hero-eq num" data-live-eq="${b}">${usd(be.eq,2)}</p>
     <p class="capsule ${cls(ch.d)}" data-chg>${moneyPct(ch.d, ch.pct)}</p>
     <div class="card">${areaChart(b,true)}</div>
     ${usefulRanges(b).length?`<div class="ranges">${usefulRanges(b).map(r=>`<button data-range="${r}" class="${(state.range||'ALL')===r?'on':''}">${r}</button>`).join('')}</div>`:''}
@@ -832,7 +833,7 @@ function missionHTML(){
   prog=Math.max(0, Math.min(100, prog||0));
   const eqv=m.current_equity!=null?m.current_equity:m.equity;
   const eq=eqv!=null?usd(eqv,2):usd(m.start!=null?m.start:150,2);
-  return `<button type="button" id="mission" class="mission"><b class="hero-eq num">${eq}</b><span class="goal">Goal ${usd(goal,0)}</span>${heroSubHTML()}<span class="mbar" style="--p:${prog.toFixed(2)}%" aria-hidden="true"><i></i></span></button>`;
+  return `<button type="button" id="mission" class="mission"><b class="hero-eq num" data-live-eq="main">${eq}</b><span class="goal">Goal ${usd(goal,0)}</span>${heroSubHTML()}<span class="fine live-asof" data-live-asof></span><span class="mbar" style="--p:${prog.toFixed(2)}%" aria-hidden="true"><i></i></span></button>`;
 }
 function streamSymbols(){
   const seen=new Set(), out=[];
@@ -1016,7 +1017,7 @@ function heroSubHTML(){
   const eq=+b.equity, start=+b.start||150, d=eq-start, pc=start?d/start*100:0, n0=+b.closed||0;
   const wr=b.win_rate==null?null:Math.round(b.win_rate*(b.win_rate<=1?100:1));
   const tr=n0?`Win ${wr==null?'—':wr+'%'} · ${n0} trade${n0===1?'':'s'}`:'No trades yet';
-  return `<span class="hero-sub"><span class="num ${cls(d)}">${moneyPct(d,pc)}</span> · ${esc(tr)}</span>`;
+  return `<span class="hero-sub"><span class="num ${cls(d)}" data-live-pl="main">${moneyPct(d,pc)}</span> · ${esc(tr)}</span>`;
 }
 function v3TradeFor(tk){ return T.find(t=>t.ticker===tk && t.book==='main' && !t.legacy_pre_autonomy && (t.status==='OPEN'||t.status==='PENDING')); }
 function airaTrade(tk){ return T.find(t=>t.ticker===tk && t.book==='aira' && (t.status==='OPEN'||t.status==='PENDING'||t.panel)); }
@@ -1163,7 +1164,7 @@ const Live = {
   key(){ try{return localStorage.getItem('sd.finnhub.key')||''}catch(e){return ''} },
   setKey(k){ if(k) localStorage.setItem('sd.finnhub.key',k); else localStorage.removeItem('sd.finnhub.key') },
   symbols(){
-    const s=new Set(typeof streamSymbols==='function'?streamSymbols():['SPY']);
+    const s=new Set([...(typeof heldSymbols==='function'?heldSymbols():[]), ...(typeof streamSymbols==='function'?streamSymbols():['SPY'])]);
     return [...s].slice(0,50);
   },
   quote(tk){ return Prices.get(tk) },
@@ -1207,7 +1208,9 @@ const Live = {
     this.pollI = setInterval(async()=>{
       if(!this.key()||this.state==='error'||document.hidden) return;
       const s=this.symbols(); if(!s.length) return;
-      const tk=s[i++%s.length];
+      /* every other tick goes to a held position, so held prices refresh every few seconds even when the socket is down */
+      const h=(typeof heldSymbols==='function'?heldSymbols():[]).filter(x=>s.includes(x));
+      const k=i++; const tk=(h.length&&k%2===0)?h[(k/2)%h.length]:s[k%s.length];
       const q=Prices.get(tk);
       if(q&&q.src==='trade'&&Date.now()-q.t<20000){ this.lastPoll=Date.now(); return }
       try{ await this.rest(tk); this.lastErr='' }
@@ -1359,10 +1362,16 @@ const UI = {
     $$('[data-chart-px]').forEach(c=>{ const px=Val.last(c.dataset.chartPx); const wrap=c.closest('.chart-wrap'); if(px==null||!wrap)return;
       const lo=+wrap.dataset.lo,hi=+wrap.dataset.hi,pt=+wrap.dataset.pt,pb=+wrap.dataset.pb,H=+wrap.dataset.h;
       const y=pt+(hi-px)/(hi-lo)*(H-pt-pb); c.setAttribute('cy',y); const line=c.previousElementSibling; if(line){line.setAttribute('y1',y);line.setAttribute('y2',y)} });
-    for(const b of ['main','shadow','mambo']){
+    for(const b of Object.keys(D.books||{})){
       const be=bookEq(b), he=$('#hero-eq');
       if(he && he.dataset.eq===b) he.textContent=usd(be.eq,2);
     }
+    $$('[data-live-eq]').forEach(el=>{ const be=bookEq(el.dataset.liveEq); const t=usd(be.eq,2); if(el.textContent!==t) el.textContent=t; });
+    $$('[data-live-pl]').forEach(el=>{ const be=bookEq(el.dataset.livePl), st=+be.k.start||150, d=be.eq-st; el.textContent=moneyPct(d, st?d/st*100:0); el.classList.remove('pos','neg','mute'); el.classList.add(cls(d)) });
+    $$('[data-live-asof]').forEach(el=>{ let t=0; for(const tk of heldSymbols()){ const q=Prices.get(tk); if(q&&q.src!=='ledger'&&q.t>t) t=q.t }
+      const st=Market.status();
+      el.textContent = t ? (st.open&&Date.now()-t<120000 ? 'Live · '+etParts(t).hms+' ET' : 'Prices as of '+etParts(t).hm+' ET') : 'Ledger mark '+String(D.as_of||D.generated_at||'').slice(11,16)+' ET'+(Live.key()?'':' · add a price key for live');
+      el.classList.toggle('on', !!t && st.open && Date.now()-t<120000) });
     const hl=$('#hero-live'), b=state.acct||'main', be=bookEq(b), ch=dayChange(b);
     const hd=$('#hero-day');
     if(hd && ch.d!=null && ch.pct!=null){ hd.textContent=moneyPct(ch.d, ch.pct); hd.classList.remove('pos','neg','mute'); hd.classList.add(cls(ch.d)) }
